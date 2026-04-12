@@ -10,14 +10,14 @@ thresholds:
   min_tc: 0.25
 
 ensemble_weights:
-  segresnet: 0.4
-  tta4: 0.3
-  swinunetr: 0.3
-  # nnunet weight is 0.0 until pretrained weights are available.
-  # Without nnunet_weights.pth the model runs on random initialization —
-  # contributing pure noise to every voxel.  Set to 0.20 only after
-  # placing validated BraTS weights in models/brats_bundle/nnunet_weights.pth
-  # and re-normalising the other weights to sum to 1.0.
+  # Weights derived from 50-case BraTS 2021 measurement (seed=42).
+  # SegResNet mean Dice: WT=0.923 TC=0.936 ET=0.856
+  # SwinUNETR: not measured on full volumes — set to 0.0 until measured.
+  #   Rerun: python scripts/compute_platt_calibration.py (without --skip_swinunetr)
+  # nnunet: 0.0 until pretrained weights placed at models/brats_bundle/nnunet_weights.pth
+  segresnet: 0.5
+  tta4: 0.5
+  swinunetr: 0.0
   nnunet: 0.0
 
 clinical:

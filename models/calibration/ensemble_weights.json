@@ -1,0 +1,21 @@
+{
+  "recommended_ensemble_weights": {
+    "segresnet": 0.5,
+    "tta4": 0.5,
+    "swinunetr": 0.0,
+    "nnunet": 0.0
+  },
+  "mean_dice_per_model": {
+    "segresnet": {
+      "tc": 0.9358361788347418,
+      "wt": 0.9228286555648026,
+      "et": 0.8557327546019711
+    },
+    "ensemble": {
+      "tc": 0.9358361788347418,
+      "wt": 0.9228286555648026,
+      "et": 0.8557327546019711
+    }
+  },
+  "n_cases": 50
+}
