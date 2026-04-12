@@ -68,10 +68,14 @@ def _compute_nmi(vol_a: np.ndarray, vol_b: np.ndarray, bins: int = 32) -> float:
     """
     Compute Normalised Mutual Information between two 3-D volumes.
 
-    NMI = 2 * (H(A) + H(B)) / (H(A) + H(B) + H(A,B))
+    NMI = (H(A) + H(B)) / H(A,B)  [Studholme convention]
 
-    Range: 1.0 (no shared information) and above.
+    Range: 1.0 (no shared information) to 2.0 (identical volumes).
     Well-registered brain MRI pairs typically fall in [1.05, 1.50].
+
+    NOTE: Previously used incorrect hybrid formula 2*(Hx+Hy)/(Hx+Hy+Hxy).
+    Fixed to proper Studholme formula to match compute_nmi() in
+    pybrain/utils/registration_validation.py (RC-NMI fix).
     """
     a = vol_a.astype(np.float64).ravel()
     b = vol_b.astype(np.float64).ravel()
@@ -88,7 +92,8 @@ def _compute_nmi(vol_a: np.ndarray, vol_b: np.ndarray, bins: int = 32) -> float:
     Hy  = -np.sum(py[py > 0] * np.log(py[py > 0]))
     Hxy = -np.sum(p[p   > 0] * np.log(p[p   > 0]))
 
-    return float(2.0 * (Hx + Hy) / (Hx + Hy + Hxy + 1e-12))
+    # Studholme NMI: (H_x + H_y) / H_xy — matches Gate A (registration_validation.py)
+    return float((Hx + Hy) / (Hxy + 1e-12))
 
 
 def validate_all_registrations(
@@ -795,10 +800,9 @@ def apply_ct_boost(
         t1 = volumes.get("T1")
         if t1 is not None and t1.shape == ct_data.shape:
             nmi = _compute_nmi(ct_data, t1)
-            # _compute_nmi uses the Studholme convention: 2*(Hx+Hy)/(Hx+Hy+Hxy),
-            # range [1.0, 2.0].  This is a DIFFERENT scale from the sklearn [0,1]
-            # NMI used by Gate A above.  Use a separate config key so both gates
-            # can be tuned independently without breaking each other.
+            # _compute_nmi now uses the correct Studholme convention: (Hx+Hy)/H_xy,
+            # range [1.0, 2.0], matching Gate A (registration_validation.py).
+            # RC-NMI fix: both gates now use the same formula scale.
             nmi_thresh_internal = boost_cfg.get("nmi_threshold_internal", 1.05)
             logger.info(f"  CT–MRI NMI (Studholme) = {nmi:.4f}  (threshold = {nmi_thresh_internal:.4f})")
             if nmi < nmi_thresh_internal:
