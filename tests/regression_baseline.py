@@ -1019,6 +1019,160 @@ def test_s5_nmi_gates_and_uncertainty_call() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S6 — Statistical threshold optimizer disabled smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s6_statistical_thresholds_disabled() -> dict:
+    """Fix 7 gate: statistical_thresholds.enabled must be false in defaults.yaml."""
+    result = {"test": "S6_statistical_thresholds_disabled", "status": SKIP, "issues": []}
+    try:
+        import yaml
+        from pathlib import Path
+        cfg = yaml.safe_load(
+            (Path(__file__).resolve().parent.parent / "config" / "defaults.yaml").read_text()
+        )
+        enabled = cfg.get("models", {}).get("statistical_thresholds", {}).get("enabled", True)
+        if enabled:
+            result["status"] = FAIL
+            result["issues"] = [
+                "models.statistical_thresholds.enabled=true — optimizer runs after NIfTIs "
+                "are written; adapted thresholds are computed and discarded (silent no-op)"
+            ]
+        else:
+            result["status"] = PASS
+        print(f"  S6 Statistical thresholds disabled: {result['status']}")
+        if result["issues"]:
+            print(f"    ✗  {result['issues'][0]}")
+        else:
+            print("    statistical_thresholds.enabled=false  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S6 Statistical thresholds disabled: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S7 — tumor_stats.json logs applied_thresholds smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s7_applied_thresholds_logged() -> dict:
+    """Fix 8 gate: tumor_stats.json must use applied_thresholds, not config.thresholds."""
+    result = {"test": "S7_applied_thresholds_logged", "status": SKIP, "issues": []}
+    try:
+        from pathlib import Path
+        src = (
+            Path(__file__).resolve().parent.parent /
+            "scripts" / "3_brain_tumor_analysis.py"
+        ).read_text()
+        issues = []
+        if '"thresholds":       config.thresholds' in src or \
+           "'thresholds':       config.thresholds" in src:
+            issues.append(
+                "tumor_stats.json still logs config.thresholds — "
+                "must log applied_thresholds (the values actually used in postprocess_segmentation)"
+            )
+        if "applied_thresholds" not in src:
+            issues.append(
+                "applied_thresholds not present in source — "
+                "Fix 8 (return final_thresholds from postprocess_segmentation) not applied"
+            )
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S7 Applied thresholds logged: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print("    tumor_stats.json uses applied_thresholds  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S7 Applied thresholds logged: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S8 — EMA calibration self-contamination guard smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s8_ema_guard() -> dict:
+    """Fix 9 gate: update_calibration_ema must exit early when no radiologist ref present."""
+    result = {"test": "S8_ema_calibration_guard", "status": SKIP, "issues": []}
+    try:
+        from pathlib import Path
+        src = (
+            Path(__file__).resolve().parent.parent /
+            "scripts" / "3_brain_tumor_analysis.py"
+        ).read_text()
+        issues = []
+        if "has_any_ref" not in src:
+            issues.append(
+                "update_calibration_ema missing has_any_ref guard — "
+                "AI-predicted volumes accumulate as EMA reference when no radiologist data present"
+            )
+        if "EMA calibration update skipped" not in src:
+            issues.append(
+                "EMA skip log message absent — guard may not be correctly implemented"
+            )
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S8 EMA calibration guard: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print("    has_any_ref guard present  ✓")
+            print("    EMA skip log message present  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S8 EMA calibration guard: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S9 — ROI localisation fallback flag smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s9_roi_fallback_flag() -> dict:
+    """Fix 10 gate: roi_localisation_failed must be present in quality_report and JSON output."""
+    result = {"test": "S9_roi_localisation_flag", "status": SKIP, "issues": []}
+    try:
+        from pathlib import Path
+        src = (
+            Path(__file__).resolve().parent.parent /
+            "scripts" / "3_brain_tumor_analysis.py"
+        ).read_text()
+        issues = []
+        if "roi_localisation_failed" not in src:
+            issues.append(
+                "roi_localisation_failed not present in source — "
+                "ROI fallback is invisible in segmentation_quality.json"
+            )
+        # Must appear both in quality_report dict construction and in the JSON write
+        occurrences = src.count("roi_localisation_failed")
+        if occurrences < 3:
+            issues.append(
+                f"roi_localisation_failed appears {occurrences} times — "
+                "expected at least 3: detection, quality_report, segmentation_quality.json"
+            )
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S9 ROI localisation flag: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print(f"    roi_localisation_failed present ({occurrences} occurrences)  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S9 ROI localisation flag: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1159,6 +1313,26 @@ def main():
     # ── S5: CT NMI dual-gate + double uncertainty call (Phase 6 gate) ───────
     print("[S5] CT NMI dual-gate + double compute_uncertainty smoke test...")
     results.append(test_s5_nmi_gates_and_uncertainty_call())
+    print()
+
+    # ── S6: Statistical thresholds disabled (Fix 7 gate) ────────────────────
+    print("[S6] Statistical thresholds disabled smoke test...")
+    results.append(test_s6_statistical_thresholds_disabled())
+    print()
+
+    # ── S7: Applied thresholds logged in tumor_stats.json (Fix 8 gate) ──────
+    print("[S7] Applied thresholds logged smoke test...")
+    results.append(test_s7_applied_thresholds_logged())
+    print()
+
+    # ── S8: EMA calibration guard (Fix 9 gate) ──────────────────────────────
+    print("[S8] EMA calibration guard smoke test...")
+    results.append(test_s8_ema_guard())
+    print()
+
+    # ── S9: ROI localisation fallback flag (Fix 10 gate) ────────────────────
+    print("[S9] ROI localisation fallback flag smoke test...")
+    results.append(test_s9_roi_fallback_flag())
     print()
 
     sr_prob = None

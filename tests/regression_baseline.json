@@ -57,6 +57,26 @@
       "nmi_threshold_gate_b": 1.05
     },
     {
+      "test": "S6_statistical_thresholds_disabled",
+      "status": "PASS",
+      "issues": []
+    },
+    {
+      "test": "S7_applied_thresholds_logged",
+      "status": "PASS",
+      "issues": []
+    },
+    {
+      "test": "S8_ema_calibration_guard",
+      "status": "PASS",
+      "issues": []
+    },
+    {
+      "test": "S9_roi_localisation_flag",
+      "status": "PASS",
+      "issues": []
+    },
+    {
       "test": "T1_segresnet_range",
       "issues": [],
       "stats": {
@@ -110,13 +130,13 @@
           128,
           128
         ],
-        "min": 4.099291288639506e-07,
-        "max": 1.0,
-        "mean": 0.49235227704048157,
-        "std": 0.15018890798091888,
-        "ch0_mean": 0.4145160913467407,
-        "ch1_mean": 0.46505236625671387,
-        "ch2_mean": 0.5974863767623901
+        "min": 3.2906971227930626e-06,
+        "max": 0.999998927116394,
+        "mean": 0.5070931911468506,
+        "std": 0.14042596518993378,
+        "ch0_mean": 0.4300517141819,
+        "ch1_mean": 0.5636066794395447,
+        "ch2_mean": 0.5276218056678772
       }
     },
     {
@@ -176,7 +196,7 @@
     }
   ],
   "summary": {
-    "PASS": 12,
+    "PASS": 16,
     "FAIL": 0,
     "SKIP": 0,
     "WARN": 2

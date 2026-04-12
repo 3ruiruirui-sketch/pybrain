@@ -881,7 +881,7 @@ def postprocess_segmentation(
     volumes: Dict[str, np.ndarray],
     model_probs_list: Optional[List[np.ndarray]] = None,
     voxel_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
     """
     Convert ensemble probability maps to a binary BraTS segmentation.
 
@@ -988,7 +988,7 @@ def postprocess_segmentation(
                 keep[labeled == i] = True
         seg_full[~keep] = 0
 
-    return seg_full, necrotic, edema, enhancing
+    return seg_full, necrotic, edema, enhancing, final_thresholds
 
 
 def _resolve_surface_threshold(tumor_type: str, config: PipelineConfig) -> float:
@@ -1178,6 +1178,19 @@ def update_calibration_ema(
     factor_path = config.output_dir.parent / cal_cfg.get(
         "factor_file", "calibration_factors.json"
     )
+
+    # Guard: only update EMA when at least one radiologist reference is present.
+    # If radiologist_ref is absent or all values are None, the AI's own predictions
+    # would become the reference — accumulating and compounding over successive runs.
+    has_any_ref = any(
+        config.radiologist_ref.get(k) is not None for k in _SUBREGION_KEYS
+    )
+    if not has_any_ref:
+        logger.info(
+            "EMA calibration update skipped: no radiologist reference values present. "
+            "Provide radiologist_ref in session metadata to enable calibration updates."
+        )
+        return
 
     # Load current state
     stored: Dict[str, Any] = {}
@@ -1453,6 +1466,7 @@ def save_all_outputs(
     quality_report: Dict[str, Any],
     model_probs_list: Optional[List[np.ndarray]] = None,
     voxel_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    applied_thresholds: Optional[Dict[str, float]] = None,
 ) -> None:
     """Save NIfTI segmentations, probability maps, and JSON reports."""
     logger     = get_logger("pybrain")
@@ -1550,7 +1564,7 @@ def save_all_outputs(
         },
         "calibrated_volume_cc": quality_report.get("calibrated", {}),
         "tumor_pct_brain": quality_report["tumor_pct_brain"],
-        "thresholds":       config.thresholds,
+        "thresholds":       applied_thresholds or config.thresholds,
         "vox_vol_cc":       quality_report["vox_vol_cc"],
     }
     with open(output_dir / "tumor_stats.json", "w") as f:
@@ -1572,6 +1586,7 @@ def save_all_outputs(
                 "n_foci":               quality_report.get("n_foci", 1),
                 "longitudinal_delta_cc":quality_report.get("longitudinal_delta_cc", {}),
                 "registration_nmi":     quality_report.get("registration_nmi", {}),
+                "roi_localisation_failed": quality_report.get("roi_localisation_failed", False),
             },
             f,
             indent=2,
@@ -1667,6 +1682,14 @@ def main() -> None:
             model_device=config.model_device,
         )
         roi_slices, orig_shape = get_tumor_bbox(sr_prob[1])
+        roi_localisation_failed = all(
+            isinstance(s, slice) and s.start is None for s in roi_slices
+        )
+        if roi_localisation_failed:
+            logger.warning(
+                "ROI localisation fallback: SegResNet found no tumour voxels above "
+                "threshold. Ensemble will run on the full volume."
+            )
         logger.info(f"Tumour ROI: {roi_slices}")
         del sr_model
         gc.collect()
@@ -1726,7 +1749,7 @@ def main() -> None:
                 )
 
         # ── Post-processing ───────────────────────────────────────────────────
-        seg_full, necrotic, edema, enhancing = postprocess_segmentation(
+        seg_full, necrotic, edema, enhancing, applied_thresholds = postprocess_segmentation(
             ensemble_prob, brain_mask, vox_vol_cc, config,
             volumes=volumes, voxel_spacing=voxel_spacing,
         )
@@ -1792,6 +1815,7 @@ def main() -> None:
             "multifocal":           is_multifocal,
             "n_foci":               n_foci,
             "registration_nmi":     registration_nmi,
+            "roi_localisation_failed": roi_localisation_failed,
         }
 
         # ── Visualizations ────────────────────────────────────────────────────
@@ -1807,7 +1831,8 @@ def main() -> None:
         save_all_outputs(
             seg_full, seg_components, ensemble_prob, uncertainty,
             brain_mask, ref_img, config, quality_report,
-            model_probs_list, voxel_spacing
+            model_probs_list, voxel_spacing,
+            applied_thresholds=applied_thresholds
         )
 
         # ── Optional ground-truth validation ──────────────────────────────────

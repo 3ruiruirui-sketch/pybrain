@@ -59,7 +59,7 @@ models:
     overlap: 0.5
     fallback_overlap: 0.25
   statistical_thresholds:
-    enabled: true
+    enabled: false
     adaptive_uncertainty: true
     uncertainty_weight: 0.1
     clinical_bounds:
