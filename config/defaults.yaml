@@ -52,7 +52,9 @@ models:
   tta4:
     roi_size: [240, 240, 160]
     overlap: 0.5
-    enhanced_tta: true
+    enhanced_tta: false  # Disabled: ensemble weights calibrated on simple 4-flip TTA.
+    # Re-enable only after re-running compute_platt_calibration.py with enhanced TTA active
+    # to re-measure TTA-4 Dice and update ensemble_weights.tta4 accordingly.
     tta_config:
       enable_flips: true
       enable_rotations: true

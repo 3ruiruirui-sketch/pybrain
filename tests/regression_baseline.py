@@ -1436,6 +1436,48 @@ def test_s13_staple_fixes() -> dict:
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_s14_swinunetr_gate_and_tta_calibration_match() -> dict:
+    """
+    S14 — Two production-calibration alignment guards:
+
+    1. SwinUNETR weight=0.0 triggers an early-exit skip in run_models
+       (mirrors the nnU-Net guard added in Fix E).  The source must contain
+       the guard check before the try/except inference block.
+
+    2. enhanced_tta must be false in config — the ensemble weights were
+       calibrated on simple 4-flip TTA.  Enabling enhanced TTA without
+       re-calibrating would introduce a distribution mismatch.
+    """
+    result: dict = {"test": "S14_swinunetr_gate_and_tta_calibration_match", "issues": []}
+    try:
+        ROOT = Path(__file__).resolve().parent.parent
+        analysis_src = (ROOT / "scripts" / "3_brain_tumor_analysis.py").read_text()
+        cfg_path = ROOT / "config" / "defaults.yaml"
+        import yaml  # type: ignore[import]
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f)
+
+        # Guard 1: SwinUNETR weight-gate present in source
+        assert "ensemble_weights.get(\"swinunetr\", 0.0)" in analysis_src or \
+               "_swin_weight = config.ensemble_weights.get(\"swinunetr\"" in analysis_src, \
+            "SwinUNETR weight=0.0 early-exit guard missing from run_models"
+
+        # Guard 2: enhanced_tta must be false (calibration used simple 4-flip)
+        tta4_cfg = cfg.get("models", {}).get("tta4", {})
+        enhanced = tta4_cfg.get("enhanced_tta", False)
+        assert enhanced is False, \
+            f"enhanced_tta={enhanced} in config but ensemble weights were calibrated on simple 4-flip TTA. " \
+            "Either disable enhanced_tta or re-run compute_platt_calibration.py with enhanced TTA active."
+
+        result["status"] = PASS
+        print(f"  S14 SwinUNETR gate + TTA calibration match: PASS")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S14 SwinUNETR gate + TTA calibration match: FAIL — {exc}")
+    return result
+
+
 def check_channel_order_docs() -> dict:
     """
     Record the verified channel-order facts as structured findings.
@@ -1613,6 +1655,11 @@ def main():
     # ── S13: STAPLE ensemble fixes (Problem D gate) ───────────────────────────
     print("[S13] STAPLE ensemble fixes smoke test...")
     results.append(test_s13_staple_fixes())
+    print()
+
+    # ── S14: SwinUNETR gate + TTA calibration alignment ───────────────────────
+    print("[S14] SwinUNETR weight=0 gate + enhanced_tta calibration match...")
+    results.append(test_s14_swinunetr_gate_and_tta_calibration_match())
     print()
 
     sr_prob = None

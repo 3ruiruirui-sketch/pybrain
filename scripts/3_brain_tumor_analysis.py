@@ -597,16 +597,23 @@ def run_models(
             logger.warning(f"TTA-4 failed: {e}")
 
     # ── SwinUNETR Multi-Fold ──────────────────────────────────────────────────
-    try:
-        swin_cfg = config.models.get("swinunetr", {})
-        logger.info("Running SwinUNETR ensemble (multi-fold)...")
-        prob = run_swinunetr_inference(
-            input_tensor, config.bundle_dir, config.device, model_cfg=swin_cfg
+    _swin_weight = config.ensemble_weights.get("swinunetr", 0.0)
+    if _swin_weight == 0.0:
+        logger.info(
+            "SwinUNETR skipped (ensemble_weights.swinunetr=0.0). "
+            "Run compute_platt_calibration.py without --skip_swinunetr to measure and enable."
         )
-        results["swinunetr"] = prob
-        cleanup_model_memory(None, config.model_device)  # SwinUNETR handles its own cleanup
-    except Exception as e:
-        logger.warning(f"SwinUNETR failed: {e}")
+    else:
+        try:
+            swin_cfg = config.models.get("swinunetr", {})
+            logger.info("Running SwinUNETR ensemble (multi-fold)...")
+            prob = run_swinunetr_inference(
+                input_tensor, config.bundle_dir, config.device, model_cfg=swin_cfg
+            )
+            results["swinunetr"] = prob
+            cleanup_model_memory(None, config.model_device)
+        except Exception as e:
+            logger.warning(f"SwinUNETR failed: {e}")
 
     # ── Optional nnU-Net (DynUNet ROI-safe) ───────────────────────────────────
     nn_cfg = dict(config.models.get("nnunet", {}))
