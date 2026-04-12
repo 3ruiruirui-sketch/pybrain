@@ -82,36 +82,22 @@ def get_default_subregion_weights(valid_models: List[Tuple[str, np.ndarray, floa
     """
     model_names = [name for name, _, _ in valid_models]
     
-    # Default weights based on model characteristics
-    default_weights = {
-        "WT": {  # Whole Tumor (edema + core)
-            "swinunetr": 0.40,  # Best at edema boundaries
-            "segresnet": 0.25,  # Moderate
-            "tta4": 0.20,       # Noise reduction
-            "nnunet": 0.15      # Generalist
-        },
-        "TC": {  # Tumor Core (necrotic + enhancing)
-            "segresnet": 0.35,  # Strong at core structures
-            "nnunet": 0.30,     # Good generalist
-            "swinunetr": 0.20,  # Moderate
-            "tta4": 0.15        # Conservative
-        },
-        "ET": {  # Enhancing Tumor
-            "swinunetr": 0.35,  # Good at enhancing regions
-            "segresnet": 0.35,  # Strong at enhancing tumor
-            "tta4": 0.20,       # Reduces false positives
-            "nnunet": 0.10      # Weaker at enhancing
-        }
+    # Per-model preference by region — only for known active models.
+    # Weights are relative (normalised inside run_subregion_weighted_ensemble).
+    # Models NOT in model_names are simply omitted — do NOT hard-code
+    # disabled models (swinunetr=0.0, nnunet=0.0) at non-zero values here.
+    KNOWN_PREFS: Dict[str, Dict[str, float]] = {
+        "WT": {"swinunetr": 1.6, "segresnet": 1.0, "tta4": 0.8},
+        "TC": {"segresnet": 1.4, "tta4": 0.6,   "swinunetr": 0.8},
+        "ET": {"segresnet": 1.4, "swinunetr": 1.4, "tta4": 0.8},
     }
-    
-    # Filter weights to only include available models
-    filtered_weights = {}
-    for region, weights in default_weights.items():
+    uniform = 1.0 / max(len(model_names), 1)
+    filtered_weights: Dict[str, Dict[str, float]] = {}
+    for region, prefs in KNOWN_PREFS.items():
         filtered_weights[region] = {
-            name: weights.get(name, 0.25)  # Default fallback weight
+            name: prefs.get(name, uniform)
             for name in model_names
         }
-    
     return filtered_weights
 
 
@@ -213,10 +199,10 @@ def validate_subregion_weights(
                 logger.error(f"Missing weight for model {model_name} in region {region}")
                 return False
         
-        # Check that weights sum to approximately 1
+        # Note: weights do NOT need to sum to 1.0 — run_subregion_weighted_ensemble
+        # normalises by total_channel_weight internally.  Only log for info.
         total_weight = sum(subregion_weights[region].values())
-        if abs(total_weight - 1.0) > 0.01:
-            logger.warning(f"Weights for region {region} sum to {total_weight:.3f}, expected 1.0")
-    
-    logger.info("✅ Subregion weights validation passed")
+        logger.debug(f"  {region}: weight sum={total_weight:.3f} (will be normalised)")
+
+    logger.info("Subregion weights validation passed")
     return True
