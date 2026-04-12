@@ -1,0 +1,149 @@
+{
+  "case": "BraTS2021_00000",
+  "device": "cpu",
+  "tests": [
+    {
+      "test": "C0_channel_order_audit",
+      "status": "PASS",
+      "findings": {
+        "pipeline_stack_order": "[FLAIR, T1, T1c, T2]  (preprocess_volumes lines 505-507)",
+        "segresnet_bundle_expects": "[T1c, T1, T2, FLAIR]  (metadata.json channel_def 0-3)",
+        "segresnet_permutation_applied": "[:,(2,1,3,0),...]  in run_segresnet_inference \u2014 CORRECT",
+        "segresnet_output_channels": "ch0=TC  ch1=WT  ch2=ET  (metadata.json pred label_classes)",
+        "swinunetr_checkpoint_in_channels": "4  (patch_embed weight shape [48,4,2,2,2])",
+        "swinunetr_checkpoint_out_channels": "3  (out.conv.conv.weight shape [3,48,1,1,1])",
+        "swinunetr_training_order": "[T1, T1ce, T2, FLAIR]  (MONAI BraTS 2021 SwinUNETR example)",
+        "swinunetr_permutation_applied": "FIXED (S6) \u2014 [:,(1,2,3,0),...] applied: T1[1]\u2192ch0, T1c[2]\u2192ch1, T2[3]\u2192ch2, FLAIR[0]\u2192ch3",
+        "swinunetr_double_normalization": "FIXED (S4) \u2014 normalize_nonzero() removed; preprocess_volumes z-score is the only normalization",
+        "swinunetr_output_channels": "ch0=TC  ch1=WT  ch2=ET  (same BraTS convention)",
+        "nnunet_weights_present": "NO \u2014 model runs on random initialization if enabled",
+        "nnunet_double_sigmoid": "FIXED (S2) \u2014 second sigmoid removed; only torch.sigmoid() at line ~160 remains",
+        "nnunet_double_normalization": "FIXED (S4) \u2014 normalize_nonzero() removed; preprocess_volumes z-score is the only normalization"
+      }
+    },
+    {
+      "test": "T1_segresnet_range",
+      "issues": [],
+      "stats": {
+        "label": "segresnet",
+        "shape": [
+          3,
+          128,
+          128,
+          128
+        ],
+        "min": 3.133950713163358e-06,
+        "max": 0.9997404217720032,
+        "mean": 0.0017750035040080547,
+        "std": 0.02187332510948181,
+        "ch0_mean": 0.0010991547023877501,
+        "ch1_mean": 0.0036965622566640377,
+        "ch2_mean": 0.0005292950663715601
+      },
+      "status": "PASS"
+    },
+    {
+      "test": "T2_swinunetr_range",
+      "issues": [],
+      "stats": {
+        "label": "swinunetr",
+        "shape": [
+          3,
+          128,
+          128,
+          128
+        ],
+        "min": 0.0,
+        "max": 1.0,
+        "mean": 0.0024407757446169853,
+        "std": 0.049100879579782486,
+        "ch0_mean": 0.002029944211244583,
+        "ch1_mean": 0.0033883105497807264,
+        "ch2_mean": 0.0019040739862248302
+      },
+      "status": "PASS"
+    },
+    {
+      "test": "T3_nnunet_range",
+      "status": "PASS",
+      "issues": [],
+      "stats": {
+        "label": "nnunet",
+        "shape": [
+          3,
+          128,
+          128,
+          128
+        ],
+        "min": 1.236520434655386e-11,
+        "max": 1.0,
+        "mean": 0.4932840168476105,
+        "std": 0.16248898208141327,
+        "ch0_mean": 0.5770617127418518,
+        "ch1_mean": 0.5101076364517212,
+        "ch2_mean": 0.3926829695701599
+      }
+    },
+    {
+      "test": "T4_rotation_identity",
+      "status": "PASS",
+      "issues": []
+    },
+    {
+      "test": "T5_roi_reassembly",
+      "status": "PASS",
+      "issues": [],
+      "orig_shape": [
+        240,
+        240,
+        155
+      ],
+      "roi_shape": [
+        128,
+        128,
+        86
+      ]
+    },
+    {
+      "test": "T8_tta_inverse_identity",
+      "status": "PASS",
+      "issues": []
+    },
+    {
+      "test": "T6_ensemble_fusion_range",
+      "status": "WARN",
+      "issues": [
+        "WARN: P(TC)>P(WT) at 3408 voxels (0.163%) \u2014 expected boundary noise"
+      ],
+      "stats": {
+        "min": 1.7908290601553745e-06,
+        "max": 0.9998111128807068,
+        "mean": 0.0020603351294994354,
+        "ch0_mean": 0.0014980644918978214,
+        "ch1_mean": 0.003564454149454832,
+        "ch2_mean": 0.0011184860486537218
+      }
+    },
+    {
+      "test": "T7_hierarchy_ET_TC_WT",
+      "status": "WARN",
+      "issues": [
+        "WARN: ET \u2284 TC: 8 voxels (0.000%) \u2014 boundary noise, resolved by postprocess",
+        "WARN: TC \u2284 WT: 6 voxels (0.000%) \u2014 boundary noise, resolved by postprocess"
+      ],
+      "stats": {
+        "wt_vox": 8572,
+        "tc_vox": 4231,
+        "et_vox": 3981,
+        "et_outside_tc": 8,
+        "tc_outside_wt": 6
+      }
+    }
+  ],
+  "summary": {
+    "PASS": 7,
+    "FAIL": 0,
+    "SKIP": 0,
+    "WARN": 2
+  }
+}
