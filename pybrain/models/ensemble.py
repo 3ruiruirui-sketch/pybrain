@@ -1,18 +1,21 @@
 import numpy as np
 import torch
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict
 from pybrain.io.logging_utils import get_logger
 
 logger = get_logger("models.ensemble")
 
 def run_weighted_ensemble(
     model_probs: List[Tuple[str, np.ndarray, float]],
-    ct_data: Optional[np.ndarray] = None,
-    ct_config: Optional[Dict] = None
 ) -> Tuple[np.ndarray, List[str]]:
     """
-    Fuses multiple probability maps using assigned weights and applies CT-density boost.
-    Enhancement: Uncertainty-aware re-weighting (Optional).
+    Fuses multiple probability maps using assigned weights.
+
+    CT boost is NOT applied here.  It is applied exclusively in
+    apply_ct_boost() in 3_brain_tumor_analysis.py, which includes NMI
+    registration validation and a tumour-probability gate.  Having a
+    second boost path here would silently double-apply the boost and
+    bypass the registration check.
     """
     valid_models = [(name, p, w) for name, p, w in model_probs if p is not None]
     if not valid_models:
@@ -22,28 +25,8 @@ def run_weighted_ensemble(
     if total_weight <= 0:
         raise ValueError(f"Total ensemble weight must be positive, got {total_weight}. Check ensemble_weights in config.")
 
-    # Simple weighted average
     p_ensemble = sum(p * w for _, p, w in valid_models) / total_weight
     contributed = [name for name, _, _ in valid_models]
-
-    # CT-Boost Logic (Physical Density Prior)
-    if ct_data is not None and ct_config:
-        # HU [35, 75] captures hyperdense tumour while excluding normal brain
-        hu_min = ct_config.get("min_hu", ct_config.get("hu_min", 35))
-        hu_max = ct_config.get("max_hu", ct_config.get("hu_max", 75))
-        boost_weight = ct_config.get("boost_factor", ct_config.get("weight", 0.30))
-
-        if ct_data.shape == p_ensemble[1].shape:
-            ct_tumor_prior = ((ct_data >= hu_min) & (ct_data <= hu_max)).astype(np.float32)
-            # Boost WT (channel 1) - matches main pipeline's apply_ct_boost
-            p_ensemble[1] = np.clip(p_ensemble[1] + (ct_tumor_prior * boost_weight), 0.0, 1.0)
-            # Maintain BraTS invariant: WT (channel 1) >= TC (channel 0)
-            p_ensemble[1] = np.maximum(p_ensemble[1], p_ensemble[0])
-            logger.info(f"Ensemble: Applied CT boost (factor={boost_weight})")
-        else:
-            logger.warning(
-                f"CT boost skipped: CT shape {ct_data.shape} != probability shape {p_ensemble[0].shape}. "
-                "Ensure CT is resampled to match MRI segmentation grid.")
 
     return p_ensemble, contributed
 

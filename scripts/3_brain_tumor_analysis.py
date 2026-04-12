@@ -709,14 +709,14 @@ def fuse_ensemble(
                     (name, prob, config.ensemble_weights.get(name, 1.0))
                     for name, prob in model_probs.items()
                 ]
-                ensemble_prob, contributed = run_weighted_ensemble(model_list, ct_data=None, ct_config=None)
+                ensemble_prob, contributed = run_weighted_ensemble(model_list)
         else:
             # Use original uniform ensemble
             model_list = [
                 (name, prob, config.ensemble_weights.get(name, 1.0))
                 for name, prob in model_probs.items()
             ]
-            ensemble_prob, contributed = run_weighted_ensemble(model_list, ct_data=None, ct_config=None)
+            ensemble_prob, contributed = run_weighted_ensemble(model_list)
             logger.info("Using uniform ensemble weights")
     
     return ensemble_prob, contributed
