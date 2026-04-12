@@ -629,7 +629,7 @@ def fuse_ensemble(
     model_probs: Dict[str, np.ndarray],
     config: PipelineConfig,
     uncertainty: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, List[str], bool]:
     """
     Weighted fusion of all available model probability maps.
 
@@ -687,7 +687,8 @@ def fuse_ensemble(
         ensemble_prob, contributed = run_subregion_weighted_ensemble(
             model_list, subregion_weights
         )
-        
+        return ensemble_prob, contributed, False   # staple_used=False
+
     else:
         # Check if STAPLE ensemble is enabled
         staple_config = config.models.get("staple_ensemble", {})
@@ -695,14 +696,14 @@ def fuse_ensemble(
         if staple_config.get("enabled", False) and len(model_probs) >= 2:
             logger.info("Using STAPLE ensemble for data-driven weight optimization")
             from pybrain.models.staple_ensemble import run_staple_ensemble, validate_staple_weights
-            
+
             # Validate current weights for STAPLE suitability
             if validate_staple_weights(model_probs, config.ensemble_weights):
-                # Run STAPLE ensemble
                 subregion_weights = staple_config.get("subregion_weights", {})
                 ensemble_prob = run_staple_ensemble(model_probs, subregion_weights)
                 contributed = list(model_probs.keys())
                 logger.info(f"STAPLE ensemble completed with {len(contributed)} models")
+                return ensemble_prob, contributed, True   # staple_used=True
             else:
                 logger.warning("Current weights not suitable for STAPLE, falling back to weighted ensemble")
                 model_list = [
@@ -718,8 +719,8 @@ def fuse_ensemble(
             ]
             ensemble_prob, contributed = run_weighted_ensemble(model_list)
             logger.info("Using uniform ensemble weights")
-    
-    return ensemble_prob, contributed
+
+    return ensemble_prob, contributed, False   # staple_used=False
 
 
 # =============================================================================
@@ -882,6 +883,7 @@ def postprocess_segmentation(
     model_probs_list: Optional[List[np.ndarray]] = None,
     voxel_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     threshold_overrides: Optional[Dict[str, float]] = None,
+    skip_platt: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
     """
     Convert ensemble probability maps to a binary BraTS segmentation.
@@ -898,8 +900,15 @@ def postprocess_segmentation(
     logger   = get_logger("pybrain")
     post_cfg = config.models.get("postprocessing", {})
 
-    # ── 1. Probability Calibration ────────────────────────────────────────────
-    ensemble_prob = apply_platt_calibration(ensemble_prob, config)
+    # ── 1. Probability Calibration ──────────────────────────────────────────────────
+    if skip_platt:
+        # STAPLE output is a probabilistic truth estimate from the EM algorithm,
+        # not a raw model probability.  Platt coefficients were fitted on raw
+        # SegResNet/SwinUNETR softmax outputs; applying them here would corrupt
+        # the STAPLE distribution (e.g. A=10 would collapse all values toward 0/1).
+        logger.info("Platt calibration skipped (STAPLE ensemble active).")
+    else:
+        ensemble_prob = apply_platt_calibration(ensemble_prob, config)
 
     tc_prob = ensemble_prob[0]
     wt_prob = ensemble_prob[1]
@@ -1684,7 +1693,7 @@ def main() -> None:
         # A premature call here used prob_list[0] as a fake ensemble, which was
         # always overwritten.  Pass None; fuse_ensemble only uses it when
         # adaptive subregion weights are enabled (default: False).
-        ensemble_prob, contributed = fuse_ensemble(model_probs, config, uncertainty=None)
+        ensemble_prob, contributed, staple_used = fuse_ensemble(model_probs, config, uncertainty=None)
         logger.info(f"Ensemble fusion using: {', '.join(contributed)}")
 
         # ── CT boost ──────────────────────────────────────────────────────────
@@ -1732,7 +1741,9 @@ def main() -> None:
                 clinical_bounds=clinical_bounds,
                 uncertainty_weight=threshold_cfg.get('uncertainty_weight', 0.1),
             )
-            safety = optimizer.validate_clinical_safety(adapted, ensemble_prob, brain_mask)
+            safety = optimizer.validate_clinical_safety(
+                adapted, ensemble_prob, brain_mask, vox_vol_cc=vox_vol_cc
+            )
             threshold_overrides = {}
             for region in ['tc', 'wt', 'et']:
                 r = safety.get(region, {})
@@ -1752,6 +1763,7 @@ def main() -> None:
             ensemble_prob, brain_mask, vox_vol_cc, config,
             volumes=volumes, voxel_spacing=voxel_spacing,
             threshold_overrides=threshold_overrides,
+            skip_platt=staple_used,
         )
 
         # ── Sub-region volumes ────────────────────────────────────────────────

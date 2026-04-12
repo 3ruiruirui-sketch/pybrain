@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from pybrain.io.logging_utils import setup_logging, get_logger
-from pybrain.models.segresnet import load_segresnet, run_segresnet_inference
+from pybrain.models.segresnet import load_segresnet, run_segresnet_inference, run_tta_ensemble
 from pybrain.models.swinunetr import run_swinunetr_inference
 from pybrain.models.ensemble import run_weighted_ensemble
 from pybrain.core.normalization import zscore_robust
@@ -153,6 +153,16 @@ def run_single_model(
             gc.collect()
             return prob
 
+        if model_name == "tta4":
+            # TTA-4 uses the same SegResNet weights — 4-flip average
+            model = load_segresnet(bundle_dir, model_device)
+            prob = run_tta_ensemble(
+                model, input_tensor, model_device, model_cfg, model_device=model_device
+            )
+            del model
+            gc.collect()
+            return prob
+
         if model_name == "swinunetr":
             prob = run_swinunetr_inference(
                 input_tensor, bundle_dir, model_device, model_cfg=model_cfg
@@ -182,6 +192,9 @@ def main() -> None:
     parser.add_argument("--skip_swinunetr", action="store_true",
                         help="Skip SwinUNETR inference (much faster; Platt fitted on SegResNet only). "
                              "Use when SwinUNETR Dice on full volumes is low or inference is too slow.")
+    parser.add_argument("--skip_tta4", action="store_true",
+                        help="Skip TTA-4 inference. By default TTA-4 is measured to compute its "
+                             "Dice independently from SegResNet. Skipping saves ~2x SegResNet time per case.")
     args = parser.parse_args()
 
     setup_logging()
@@ -219,14 +232,21 @@ def main() -> None:
 
     # Accumulators for per-model Dice
     dice_records: List[dict] = []
-    active_models = ["segresnet", "ensemble"] if args.skip_swinunetr else ["segresnet", "swinunetr", "ensemble"]
+    active_models = ["segresnet", "tta4", "ensemble"]
+    if not args.skip_swinunetr:
+        active_models.insert(2, "swinunetr")
+    if args.skip_tta4:
+        active_models.remove("tta4")
     per_model_dice: Dict[str, Dict[str, List[float]]] = {
         m: {c: [] for c in channel_names}
         for m in active_models
     }
     if args.skip_swinunetr:
-        logger.info("--skip_swinunetr: SwinUNETR inference will be skipped. "
-                    "Platt coefficients fitted on SegResNet ensemble only.")
+        logger.info("--skip_swinunetr: SwinUNETR inference will be skipped.")
+    if args.skip_tta4:
+        logger.info("--skip_tta4: TTA-4 inference will be skipped (tta4 weight will copy segresnet).")
+    else:
+        logger.info("TTA-4 will be measured independently (recommended for evidence-based weights).")
 
     # ── Per-case loop ─────────────────────────────────────────────────────────
     for case_idx, case_dir in enumerate(cases):
@@ -248,6 +268,15 @@ def main() -> None:
         sr_prob = run_single_model("segresnet", input_tensor, device, args.bundle_dir, sr_cfg)
         if sr_prob is not None:
             model_probs["segresnet"] = sr_prob
+
+        # ── TTA-4 (SegResNet with 4-flip test-time augmentation) ──────────────
+        if not args.skip_tta4:
+            logger.info("  Running TTA-4...")
+            tta4_prob = run_single_model("tta4", input_tensor, device, args.bundle_dir, sr_cfg)
+            if tta4_prob is not None:
+                model_probs["tta4"] = tta4_prob
+        else:
+            logger.info("  TTA-4 skipped (--skip_tta4)")
 
         # ── SwinUNETR ─────────────────────────────────────────────────────────
         if not args.skip_swinunetr:
@@ -356,25 +385,24 @@ def main() -> None:
                     f"(n={len(scores)})"
                 )
 
-    # Overall weight = mean Dice across all 3 channels
+    # Overall weight = mean Dice across all 3 channels for each measured model
     model_overall: Dict[str, float] = {}
-    measured_models = ["segresnet"] if args.skip_swinunetr else ["segresnet", "swinunetr"]
-    for model_name in measured_models:
+    for model_name in ["segresnet", "tta4", "swinunetr"]:
         if model_name in mean_dice:
             scores_all = [mean_dice[model_name][c] for c in channel_names if c in mean_dice[model_name]]
             model_overall[model_name] = float(np.mean(scores_all)) if scores_all else 0.0
 
+    # Models not measured get weight 0.0 with a log message
+    if args.skip_tta4:
+        # TTA-4 not measured — assign same weight as SegResNet as a safe default
+        model_overall["tta4"] = model_overall.get("segresnet", 0.0)
+        logger.info("tta4 weight set equal to segresnet (not measured — rerun without --skip_tta4 to measure)")
+    if args.skip_swinunetr:
+        model_overall["swinunetr"] = 0.0
+        logger.info("swinunetr weight set to 0.0 (not measured — rerun without --skip_swinunetr to measure)")
+
     total = sum(model_overall.values()) + 1e-8
     normalised_weights = {m: round(v / total, 4) for m, v in model_overall.items()}
-    # TTA-4 not run independently here — assign same weight as SegResNet as a safe default
-    normalised_weights["tta4"] = normalised_weights.get("segresnet", 0.33)
-    if args.skip_swinunetr:
-        # SwinUNETR not measured — set to 0.0 pending a full measurement run
-        normalised_weights["swinunetr"] = 0.0
-        logger.info("swinunetr weight set to 0.0 (not measured — rerun without --skip_swinunetr to measure)")
-    # Re-normalise
-    total2 = sum(normalised_weights.values()) + 1e-8
-    normalised_weights = {m: round(v / total2, 4) for m, v in normalised_weights.items()}
     normalised_weights["nnunet"] = 0.0   # Always 0 until weights provided
 
     logger.info(f"\nRecommended ensemble_weights: {normalised_weights}")
