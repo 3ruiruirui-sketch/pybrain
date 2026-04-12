@@ -262,6 +262,7 @@ def test_t3_nnunet(input_tensor, device) -> dict:
         small_input = input_tensor[:, :, :128, :128, :128].clone()
 
         nn_cfg = {
+            "enabled": True,         # bypass production guard — this test checks architecture
             "roi_size": [128, 128, 128],
             "overlap": 0.0,          # zero overlap → exactly one tile, runs fast
             "filters": [32, 64, 128],

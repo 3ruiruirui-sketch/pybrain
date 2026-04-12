@@ -14,7 +14,8 @@ ensemble_weights:
   # SegResNet mean Dice: WT=0.923 TC=0.936 ET=0.856
   # SwinUNETR: not measured on full volumes — set to 0.0 until measured.
   #   Rerun: python scripts/compute_platt_calibration.py (without --skip_swinunetr)
-  # nnunet: 0.0 until pretrained weights placed at models/brats_bundle/nnunet_weights.pth
+  # nnunet is excluded from this pipeline — weight permanently 0.0.
+  # Do not change without validated BraTS pretrained weights.
   segresnet: 0.5
   tta4: 0.5
   swinunetr: 0.0
@@ -82,9 +83,8 @@ models:
       #   segresnet: 1.0
       #   tta4: 0.8
   nnunet:
-    enabled: false
-    # weight: do NOT enable before placing pretrained weights at
-    # models/brats_bundle/nnunet_weights.pth.  See ensemble_weights.nnunet.
+    enabled: false  # Permanently disabled — no pretrained weights in this deployment.
+    # ensemble_weights.nnunet is locked to 0.0. Do not enable.
     roi_size: [128, 128, 128]
     overlap: 0.5
   mc_dropout:

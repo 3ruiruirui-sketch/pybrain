@@ -95,6 +95,14 @@ def run_nnunet_inference(
     """
     model_cfg = model_cfg or {}
 
+    # ── Hard gate: bail out immediately if disabled or weight=0 ──────────────
+    # This prevents any accidental model load when nnunet is excluded from
+    # the pipeline (ensemble_weights.nnunet=0.0 / models.nnunet.enabled=false).
+    if not model_cfg.get("enabled", False):
+        logger.info("nnU-Net disabled (models.nnunet.enabled=false) — skipping inference")
+        spatial = tuple(input_tensor.shape[2:])
+        return np.zeros((3,) + spatial, dtype=np.float32)
+
     # Load model
     model = load_nnunet(device, model_cfg)
 
