@@ -53,7 +53,8 @@ class StatisticalThresholdOptimizer:
         probabilities: np.ndarray,
         uncertainty: np.ndarray,
         region_names: List[str],
-        target_volumes: Optional[Dict[str, float]] = None
+        target_volumes: Optional[Dict[str, float]] = None,
+        vox_vol_cc: float = 0.001,
     ) -> Dict[str, float]:
         """
         Optimize thresholds using uncertainty-weighted approach.
@@ -92,7 +93,7 @@ class StatisticalThresholdOptimizer:
             if len(confident_probs) > 100:  # Minimum voxels for reliable optimization
                 # Use Youden's J statistic approach
                 optimal_thresh = self._find_youden_threshold(
-                    confident_probs, region, target_volumes
+                    confident_probs, region, target_volumes, vox_vol_cc=vox_vol_cc
                 )
                 
                 # Apply uncertainty-based adjustment
@@ -128,7 +129,8 @@ class StatisticalThresholdOptimizer:
         self,
         probabilities: np.ndarray,
         region: str,
-        target_volumes: Optional[Dict[str, float]] = None
+        target_volumes: Optional[Dict[str, float]] = None,
+        vox_vol_cc: float = 0.001,
     ) -> float:
         """
         Find optimal threshold using Youden's J statistic.
@@ -157,8 +159,7 @@ class StatisticalThresholdOptimizer:
         
         # Method 2: Volume-constrained optimization (if target provided)
         if target_volumes and region in target_volumes:
-            vox_vol = 0.00095367431640625  # 1mm³ voxel volume in cc
-            target_voxels = target_volumes[region] / vox_vol
+            target_voxels = target_volumes[region] / max(vox_vol_cc, 1e-9)
             
             # Find threshold that gives closest volume to target
             sorted_probs = np.sort(probabilities)[::-1]
