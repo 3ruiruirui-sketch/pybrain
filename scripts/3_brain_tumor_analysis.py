@@ -908,13 +908,10 @@ def postprocess_segmentation(
     post_cfg = config.models.get("postprocessing", {})
 
     # ── 1. Probability Calibration ──────────────────────────────────────────────────
-    if skip_platt:
-        # STAPLE output is a probabilistic truth estimate from the EM algorithm,
-        # not a raw model probability.  Platt coefficients were fitted on raw
-        # SegResNet/SwinUNETR softmax outputs; applying them here would corrupt
-        # the STAPLE distribution (e.g. A=10 would collapse all values toward 0/1).
-        logger.info("Platt calibration skipped (STAPLE ensemble active).")
-    else:
+    # Calibration is now applied upstream in main() before threshold adaptation (RC-4).
+    # skip_platt is always True when called from main(); this block is retained
+    # for callers that invoke postprocess_segmentation directly without pre-calibrating.
+    if not skip_platt:
         ensemble_prob = apply_platt_calibration(ensemble_prob, config)
 
     tc_prob = ensemble_prob[0]
@@ -1717,10 +1714,24 @@ def main() -> None:
                     brain_mask=brain_mask, volumes=volumes, mri_data=mri_for_nmi,
                 )
 
+        # ── Platt calibration (pre-applied before threshold adaptation) ─────────
+        # Applied here so that statistical threshold adaptation operates on
+        # calibrated probabilities.  Previously calibration ran inside
+        # postprocess_segmentation AFTER threshold adaptation — meaning the
+        # adapted thresholds were derived from raw sigmoid outputs, not the
+        # final calibrated probability space (RC-4 fix).
+        # skip_platt=True is passed to postprocess_segmentation below so
+        # calibration is not applied a second time.
+        if not staple_used:
+            ensemble_prob = apply_platt_calibration(ensemble_prob, config)
+        else:
+            logger.info("Platt calibration skipped (STAPLE ensemble active — EM output is not raw sigmoid).")
+
         # ── Statistical threshold adaptation (Problem C fix) ─────────────────
         # Runs BEFORE postprocess_segmentation so adapted thresholds actually
         # gate the NIfTI outputs.  Previously this block ran inside
         # save_all_outputs AFTER NIfTIs were written — a silent no-op.
+        # Operates on calibrated probabilities (Platt applied above).
         threshold_overrides: Optional[Dict[str, float]] = None
         threshold_cfg = config.models.get("statistical_thresholds", {})
         if threshold_cfg.get("enabled", False):
@@ -1770,7 +1781,7 @@ def main() -> None:
             ensemble_prob, brain_mask, vox_vol_cc, config,
             volumes=volumes, voxel_spacing=voxel_spacing,
             threshold_overrides=threshold_overrides,
-            skip_platt=staple_used,
+            skip_platt=True,  # Platt calibration already applied above (RC-4)
         )
 
         # ── Sub-region volumes ────────────────────────────────────────────────

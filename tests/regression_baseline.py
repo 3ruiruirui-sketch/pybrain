@@ -1438,6 +1438,79 @@ def test_s13_staple_fixes() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S15 — Platt calibration ordering (RC-4 fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s15_platt_before_threshold_adaptation() -> dict:
+    """
+    RC-4 gate: apply_platt_calibration must be called in main() BEFORE
+    adaptive_threshold_from_uncertainty so that threshold adaptation operates
+    on calibrated probabilities, not raw sigmoid outputs.
+
+    Checks (source-scan only, no model inference):
+      1. apply_platt_calibration appears before adaptive_threshold_from_uncertainty
+         in the main() function body.
+      2. postprocess_segmentation is called with skip_platt=True (calibration
+         already pre-applied, must not run again inside postprocess).
+      3. The old skip_platt=staple_used pattern is absent (it is now always True).
+    """
+    result = {"test": "S15_platt_before_threshold_adaptation", "status": SKIP, "issues": []}
+    try:
+        import ast
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        src = (root / "scripts" / "3_brain_tumor_analysis.py").read_text()
+        issues = []
+
+        # 1. Ordering in main(): platt before adaptive_threshold
+        pos_platt  = src.find("ensemble_prob = apply_platt_calibration(ensemble_prob, config)")
+        pos_thresh = src.find("adaptive_threshold_from_uncertainty(")
+        if pos_platt == -1:
+            issues.append(
+                "apply_platt_calibration not found in main() — RC-4 not applied"
+            )
+        elif pos_thresh == -1:
+            issues.append(
+                "adaptive_threshold_from_uncertainty call not found — threshold adaptation missing"
+            )
+        elif pos_platt > pos_thresh:
+            issues.append(
+                "apply_platt_calibration appears AFTER adaptive_threshold_from_uncertainty "
+                "— thresholds are still adapted on uncalibrated probabilities (RC-4 regression)"
+            )
+
+        # 2. postprocess_segmentation must be called with skip_platt=True
+        if "skip_platt=True,  # Platt calibration already applied above (RC-4)" not in src:
+            issues.append(
+                "postprocess_segmentation not called with skip_platt=True "
+                "— Platt calibration would be applied twice"
+            )
+
+        # 3. Old skip_platt=staple_used pattern must be gone from the postprocess call
+        if "skip_platt=staple_used," in src:
+            issues.append(
+                "Old skip_platt=staple_used pattern still present in postprocess call "
+                "— RC-4 not fully applied"
+            )
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S15 Platt-before-threshold ordering: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    \u2717  {iss}")
+        else:
+            print("    apply_platt_calibration precedes adaptive_threshold_from_uncertainty  \u2713")
+            print("    postprocess_segmentation called with skip_platt=True  \u2713")
+            print("    old skip_platt=staple_used pattern absent  \u2713")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S15 Platt-before-threshold ordering: FAIL \u2014 {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1665,6 +1738,11 @@ def main():
     # ── S14: SwinUNETR gate + TTA calibration alignment ───────────────────────
     print("[S14] SwinUNETR weight=0 gate + enhanced_tta calibration match...")
     results.append(test_s14_swinunetr_gate_and_tta_calibration_match())
+    print()
+
+    # ── S15: Platt calibration ordering (RC-4 fix) ────────────────────────────
+    print("[S15] Platt calibration applied before threshold adaptation...")
+    results.append(test_s15_platt_before_threshold_adaptation())
     print()
 
     sr_prob = None
