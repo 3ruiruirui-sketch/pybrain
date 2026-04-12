@@ -773,6 +773,90 @@ def test_s2_wt_threshold_consistency() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S3 — Uncertainty metric correctness smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s3_uncertainty_correctness() -> dict:
+    """
+    Phase 3 gate: verifies that compute_uncertainty satisfies two key properties.
+
+    Property 1 — Identical models → inter-model variance = 0.
+      Two copies of the same probability map must produce lower uncertainty
+      than two maximally disagreeing models.
+
+    Property 2 — Maximally disagreeing models → maximum uncertainty.
+      p_model1=1.0 everywhere, p_model2=0.0 everywhere: this is the worst
+      possible disagreement. The resulting uncertainty must be strictly
+      greater than the identical-model case.
+
+    Root cause being tested: before Phase 3, per-volume min-max normalization
+    mapped both cases to the same [0,1] range, making the safety escalation
+    flag fire on confident cases and go silent on uncertain ones.
+
+    No model inference, no data. Pure numpy.
+    """
+    result = {"test": "S3_uncertainty_correctness", "status": SKIP, "issues": []}
+    try:
+        import numpy as np
+        from pybrain.models.ensemble import compute_uncertainty
+
+        issues = []
+        shape = (3, 16, 16, 16)
+
+        # ── Property 1: identical models → minimum uncertainty ────────────────
+        p_confident = np.full(shape, 0.05, dtype=np.float32)  # low-prob, consistent
+        u_identical = compute_uncertainty(p_confident, [p_confident, p_confident])
+
+        # ── Property 2: maximally disagreeing models → high uncertainty ───────
+        p_all_ones  = np.ones(shape,  dtype=np.float32)
+        p_all_zeros = np.zeros(shape, dtype=np.float32)
+        u_maxdisagree = compute_uncertainty(
+            (p_all_ones + p_all_zeros) / 2.0,
+            [p_all_ones, p_all_zeros],
+        )
+
+        mean_identical   = float(u_identical.mean())
+        mean_maxdisagree = float(u_maxdisagree.mean())
+
+        if not (mean_maxdisagree > mean_identical):
+            issues.append(
+                f"Uncertainty inversion: identical models mean={mean_identical:.4f} "
+                f">= max-disagree mean={mean_maxdisagree:.4f} — "
+                "per-volume min-max normalization likely still present"
+            )
+
+        # ── Property 3: two identical confident models → near-zero variance ──
+        p_sure = np.full(shape, 0.01, dtype=np.float32)
+        u_sure = compute_uncertainty(p_sure, [p_sure, p_sure])
+        # Variance term must be 0; only entropy contributes
+        # entropy at p=0.01: -(0.01*ln0.01 + 0.99*ln0.99) ≈ 0.056 nats
+        # weighted: 0.4 * 0.056 ≈ 0.022
+        max_sure = float(u_sure.max())
+        if max_sure > 0.10:
+            issues.append(
+                f"Identical-model max uncertainty={max_sure:.4f} > 0.10 — "
+                "inter-model variance should be 0 for identical inputs"
+            )
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        result["mean_identical"]    = round(mean_identical, 5)
+        result["mean_maxdisagree"]  = round(mean_maxdisagree, 5)
+        print(f"  S3 Uncertainty correctness: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print(f"    identical models mean={mean_identical:.4f}  max-disagree mean={mean_maxdisagree:.4f}  ✓")
+            print(f"    disagreement > identical  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S3 Uncertainty correctness: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -898,6 +982,11 @@ def main():
     # ── S2: WT threshold consistency smoke test (Phase 2 gate) ──────────────
     print("[S2] WT threshold consistency smoke test...")
     results.append(test_s2_wt_threshold_consistency())
+    print()
+
+    # ── S3: Uncertainty metric correctness smoke test (Phase 3 gate) ────────
+    print("[S3] Uncertainty metric correctness smoke test...")
+    results.append(test_s3_uncertainty_correctness())
     print()
 
     sr_prob = None
