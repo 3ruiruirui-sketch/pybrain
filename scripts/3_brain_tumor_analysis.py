@@ -523,6 +523,7 @@ def preprocess_volumes(
 def run_models(
     input_tensor: Tensor,
     config: PipelineConfig,
+    precomputed: Optional[Dict[str, np.ndarray]] = None,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
     Run all enabled models and return per-model probability maps.
@@ -530,56 +531,70 @@ def run_models(
     MC-Dropout integration: Performs stochastic forward passes with dropout
     enabled for calibrated uncertainty quantification. The resulting variance
     maps provide FDA/CE-MDR compliant uncertainty estimates.
+
+    Args:
+        precomputed: Optional dict of {model_name: prob_array} for models whose
+            inference has already been performed (e.g. SegResNet Stage 3a pass).
+            Precomputed results bypass model loading and inference entirely.
     """
     results: Dict[str, np.ndarray] = {}
     mc_uncertainties: Dict[str, np.ndarray] = {}
     logger = get_logger("pybrain")
-    
+    _precomputed = precomputed or {}
+
     # Check if MC-Dropout is enabled
     mc_config = config.models.get("mc_dropout", {})
     mc_enabled = mc_config.get("enabled", False)
     n_samples = mc_config.get("n_samples", 20)
 
     # ── SegResNet ─────────────────────────────────────────────────────────────
-    try:
-        logger.info("Loading SegResNet...")
-        model  = load_segresnet(config.bundle_dir, config.model_device)
-        sr_cfg = config.models.get("segresnet", {})
-        if mc_enabled and "segresnet" in mc_config.get("models", []):
-            # Use MC-Dropout for SegResNet
-            from pybrain.models.mc_dropout import run_mc_dropout_inference
-            logger.info(f"Running SegResNet with MC-Dropout ({n_samples} samples)...")
-            mean_prob, std_prob = run_mc_dropout_inference(
-                model, input_tensor, config.device, n_samples, sr_cfg, config.model_device
-            )
-            prob = mean_prob
-            mc_uncertainties["segresnet"] = std_prob
-            logger.info("SegResNet MC-Dropout completed")
-        else:
-            # Standard inference
-            prob = run_segresnet_inference(
-                model, input_tensor, config.device, sr_cfg,
-                model_device=config.model_device,
-            )
-        
-        results["segresnet"] = prob
-        cleanup_model_memory(model, config.model_device)
-    except Exception as e:
-        logger.warning(f"SegResNet failed: {e}")
+    if "segresnet" in _precomputed:
+        logger.info("SegResNet: using Stage 3a pre-computed result (no re-inference).")
+        results["segresnet"] = _precomputed["segresnet"]
+    else:
+        try:
+            logger.info("Loading SegResNet...")
+            model  = load_segresnet(config.bundle_dir, config.model_device)
+            sr_cfg = config.models.get("segresnet", {})
+            if mc_enabled and "segresnet" in mc_config.get("models", []):
+                # Use MC-Dropout for SegResNet
+                from pybrain.models.mc_dropout import run_mc_dropout_inference
+                logger.info(f"Running SegResNet with MC-Dropout ({n_samples} samples)...")
+                mean_prob, std_prob = run_mc_dropout_inference(
+                    model, input_tensor, config.device, n_samples, sr_cfg, config.model_device
+                )
+                prob = mean_prob
+                mc_uncertainties["segresnet"] = std_prob
+                logger.info("SegResNet MC-Dropout completed")
+            else:
+                # Standard inference
+                prob = run_segresnet_inference(
+                    model, input_tensor, config.device, sr_cfg,
+                    model_device=config.model_device,
+                )
+
+            results["segresnet"] = prob
+            cleanup_model_memory(model, config.model_device)
+        except Exception as e:
+            logger.warning(f"SegResNet failed: {e}")
 
     # ── SegResNet TTA-4 ───────────────────────────────────────────────────────
-    try:
-        logger.info("Running SegResNet with TTA-4...")
-        model   = load_segresnet(config.bundle_dir, config.model_device)
-        tta_cfg = config.models.get("tta4", {})
-        prob    = run_tta_ensemble(
-            model, input_tensor, config.device, tta_cfg,
-            model_device=config.model_device,
-        )
-        results["tta4"] = prob
-        cleanup_model_memory(model, config.model_device)
-    except Exception as e:
-        logger.warning(f"TTA-4 failed: {e}")
+    if "tta4" in _precomputed:
+        logger.info("TTA-4: using pre-computed result (no re-inference).")
+        results["tta4"] = _precomputed["tta4"]
+    else:
+        try:
+            logger.info("Running SegResNet with TTA-4...")
+            model   = load_segresnet(config.bundle_dir, config.model_device)
+            tta_cfg = config.models.get("tta4", {})
+            prob    = run_tta_ensemble(
+                model, input_tensor, config.device, tta_cfg,
+                model_device=config.model_device,
+            )
+            results["tta4"] = prob
+            cleanup_model_memory(model, config.model_device)
+        except Exception as e:
+            logger.warning(f"TTA-4 failed: {e}")
 
     # ── SwinUNETR Multi-Fold ──────────────────────────────────────────────────
     try:
@@ -1656,11 +1671,22 @@ def main() -> None:
         # ── Stage 3b: Focused ensemble on ROI ─────────────────────────────────
         logger.info("Stage 3b: Focused ensemble inference (ROI)...")
         roi_input = input_tensor[:, :, roi_slices[0], roi_slices[1], roi_slices[2]].clone()
-        del input_tensor, sr_prob
+        del input_tensor
         gc.collect()
         _gpu_cache_clear(config.model_device)
 
-        results_roi, mc_uncertainties_roi = run_models(roi_input, config)
+        # Crop the Stage 3a SegResNet full-volume probability to the ROI instead
+        # of re-running SegResNet on the undersized ROI crop.  The full-volume
+        # pass (window = 240×240×160, matching the trained size) is higher quality
+        # than a second pass that would be padded to fit a ~128³ input.
+        sr_prob_roi = sr_prob[:, roi_slices[0], roi_slices[1], roi_slices[2]]
+        del sr_prob
+        gc.collect()
+
+        results_roi, mc_uncertainties_roi = run_models(
+            roi_input, config,
+            precomputed={"segresnet": sr_prob_roi},
+        )
 
         # Reassemble ROI → full volume
         model_probs: Dict[str, np.ndarray] = {}
