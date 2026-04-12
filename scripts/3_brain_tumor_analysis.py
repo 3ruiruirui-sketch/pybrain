@@ -770,7 +770,7 @@ def apply_ct_boost(
     if boost_cfg.get("nmi_validation", True) and mri_data is not None:
         from pybrain.utils.registration_validation import should_apply_ct_boost
         
-        nmi_threshold = boost_cfg.get("nmi_threshold", 0.3)
+        nmi_threshold = boost_cfg.get("nmi_threshold", 1.3)
         force_enable = boost_cfg.get("force_enable", False)
         
         # Use T1c channel for NMI validation (best for CT-MRI alignment)
