@@ -881,6 +881,7 @@ def postprocess_segmentation(
     volumes: Dict[str, np.ndarray],
     model_probs_list: Optional[List[np.ndarray]] = None,
     voxel_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    threshold_overrides: Optional[Dict[str, float]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
     """
     Convert ensemble probability maps to a binary BraTS segmentation.
@@ -904,18 +905,25 @@ def postprocess_segmentation(
     wt_prob = ensemble_prob[1]
     et_prob = ensemble_prob[2]
 
-    # Initialize thresholds (will be updated by statistical optimization if enabled)
-    # Fallbacks are 0.35 for all subregions — consistent with defaults.yaml.
-    # Previously WT fallback was 0.45 (inconsistent with config and all other thresholds).
-    final_thresholds = {
-        'tc': config.thresholds.get("tc", 0.35),
-        'wt': config.thresholds.get("wt", 0.35),
-        'et': config.thresholds.get("et", 0.35)
-    }
+    # Thresholds: use pre-computed adaptive overrides if supplied (Problem C fix),
+    # otherwise fall back to config values.
+    if threshold_overrides:
+        final_thresholds = {
+            'tc': threshold_overrides.get('tc', config.thresholds.get('tc', 0.35)),
+            'wt': threshold_overrides.get('wt', config.thresholds.get('wt', 0.35)),
+            'et': threshold_overrides.get('et', config.thresholds.get('et', 0.35)),
+        }
+        logger.info("Using pre-computed adaptive thresholds (statistical_thresholds enabled)")
+    else:
+        final_thresholds = {
+            'tc': config.thresholds.get('tc', 0.35),
+            'wt': config.thresholds.get('wt', 0.35),
+            'et': config.thresholds.get('et', 0.35),
+        }
 
-    wt_thresh = final_thresholds.get("wt", 0.35)
-    tc_thresh = final_thresholds.get("tc", 0.35)
-    et_thresh = final_thresholds.get("et", 0.35)
+    wt_thresh = final_thresholds['wt']
+    tc_thresh = final_thresholds['tc']
+    et_thresh = final_thresholds['et']
     logger.info(f"Thresholds applied: WT={wt_thresh}  TC={tc_thresh}  ET={et_thresh}")
 
     # ── 2. Threshold + hierarchical consistency ───────────────────────────────
@@ -1485,21 +1493,6 @@ def save_all_outputs(
     save_nifti(seg_components["edema"],    output_dir / "seg_edema.nii.gz",             ref_img)
     save_nifti(seg_components["enhancing"],output_dir / "seg_enhancing.nii.gz",         ref_img)
     
-    # Statistical Threshold Optimization (BraTS QU-inspired)
-    # Initialize final_thresholds for statistical optimization
-    # Fallback 0.35 for all — consistent with defaults.yaml and postprocess_segmentation.
-    final_thresholds = {
-        'tc': config.thresholds.get("tc", 0.35),
-        'wt': config.thresholds.get("wt", 0.35),
-        'et': config.thresholds.get("et", 0.35)
-    }
-    
-    # statistical_thresholds is disabled (enabled=false in defaults.yaml).
-    # The optimizer block ran after NIfTIs were written — a silent no-op.
-    # It is kept here for future re-enablement once the pipeline order is
-    # restructured, but it must remain disabled until then.
-    # The uncertainty parameter passed in is used directly; no recomputation.
-
     # Save ensemble probabilities and uncertainty
     save_nifti(
         ensemble_prob,
@@ -1708,10 +1701,57 @@ def main() -> None:
                     brain_mask=brain_mask, volumes=volumes, mri_data=mri_for_nmi,
                 )
 
+        # ── Statistical threshold adaptation (Problem C fix) ─────────────────
+        # Runs BEFORE postprocess_segmentation so adapted thresholds actually
+        # gate the NIfTI outputs.  Previously this block ran inside
+        # save_all_outputs AFTER NIfTIs were written — a silent no-op.
+        threshold_overrides: Optional[Dict[str, float]] = None
+        threshold_cfg = config.models.get("statistical_thresholds", {})
+        if threshold_cfg.get("enabled", False):
+            logger.info("Stage 2c: Statistical threshold adaptation...")
+            from pybrain.utils.threshold_optimizer import (
+                adaptive_threshold_from_uncertainty,
+                StatisticalThresholdOptimizer,
+            )
+            base_thresholds = {
+                'tc': config.thresholds.get('tc', 0.35),
+                'wt': config.thresholds.get('wt', 0.35),
+                'et': config.thresholds.get('et', 0.35),
+            }
+            clinical_bounds = threshold_cfg.get('clinical_bounds') or {
+                'wt': (0.30, 0.70), 'tc': (0.25, 0.65), 'et': (0.20, 0.60)
+            }
+            # Compute uncertainty now (needed for adaptation); will be reused below
+            _prob_list_for_thresh = [model_probs[n] for n in contributed if n in model_probs]
+            _unc_for_thresh = compute_uncertainty(ensemble_prob, _prob_list_for_thresh)
+            adapted = adaptive_threshold_from_uncertainty(
+                ensemble_prob, _unc_for_thresh, base_thresholds, clinical_bounds
+            )
+            # Safety check: validate each adapted threshold stays in clinical bounds
+            optimizer = StatisticalThresholdOptimizer(
+                clinical_bounds=clinical_bounds,
+                uncertainty_weight=threshold_cfg.get('uncertainty_weight', 0.1),
+            )
+            safety = optimizer.validate_clinical_safety(adapted, ensemble_prob, brain_mask)
+            threshold_overrides = {}
+            for region in ['tc', 'wt', 'et']:
+                r = safety.get(region, {})
+                if isinstance(r, dict) and r.get('safe', False):
+                    threshold_overrides[region] = adapted[region]
+                    logger.info(f"  {region.upper()}: adapted={adapted[region]:.3f} ✓ safe")
+                else:
+                    threshold_overrides[region] = base_thresholds[region]
+                    logger.warning(
+                        f"  {region.upper()}: safety check failed — "
+                        f"reverting to base threshold {base_thresholds[region]:.3f}"
+                    )
+            del _prob_list_for_thresh, _unc_for_thresh
+
         # ── Post-processing ───────────────────────────────────────────────────
         seg_full, necrotic, edema, enhancing, applied_thresholds = postprocess_segmentation(
             ensemble_prob, brain_mask, vox_vol_cc, config,
             volumes=volumes, voxel_spacing=voxel_spacing,
+            threshold_overrides=threshold_overrides,
         )
 
         # ── Sub-region volumes ────────────────────────────────────────────────

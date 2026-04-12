@@ -1019,36 +1019,74 @@ def test_s5_nmi_gates_and_uncertainty_call() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# S6 — Statistical threshold optimizer disabled smoke test
+# S6 — Statistical threshold optimizer pipeline-order smoke test (Problem C)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_s6_statistical_thresholds_disabled() -> dict:
-    """Fix 7 gate: statistical_thresholds.enabled must be false in defaults.yaml."""
+    """
+    Problem C gate: threshold adaptation must run BEFORE postprocess_segmentation.
+    Checks:
+      1. threshold_overrides injection precedes the postprocess_segmentation call.
+      2. Dead StatisticalThresholdOptimizer block absent from save_all_outputs.
+      3. statistical_thresholds.enabled=true in config (optimizer is now live).
+    """
     result = {"test": "S6_statistical_thresholds_disabled", "status": SKIP, "issues": []}
     try:
-        import yaml
+        import ast, yaml
         from pathlib import Path
-        cfg = yaml.safe_load(
-            (Path(__file__).resolve().parent.parent / "config" / "defaults.yaml").read_text()
-        )
-        enabled = cfg.get("models", {}).get("statistical_thresholds", {}).get("enabled", True)
-        if enabled:
-            result["status"] = FAIL
-            result["issues"] = [
-                "models.statistical_thresholds.enabled=true — optimizer runs after NIfTIs "
-                "are written; adapted thresholds are computed and discarded (silent no-op)"
-            ]
+        root = Path(__file__).resolve().parent.parent
+
+        src = (root / "scripts" / "3_brain_tumor_analysis.py").read_text()
+        cfg = yaml.safe_load((root / "config" / "defaults.yaml").read_text())
+        issues = []
+
+        # 1. threshold_overrides must appear BEFORE postprocess_segmentation in main()
+        pos_overrides   = src.find("threshold_overrides: Optional[Dict[str, float]] = None")
+        pos_postprocess = src.find("threshold_overrides=threshold_overrides,")
+        if pos_overrides == -1:
+            issues.append("threshold_overrides not found in main() — Problem C not applied")
+        elif pos_postprocess == -1:
+            issues.append("threshold_overrides not passed to postprocess_segmentation")
+        elif pos_overrides > pos_postprocess:
+            issues.append(
+                "threshold_overrides computed AFTER its use — adapted thresholds "
+                "will not gate the NIfTI output (Problem C regression)"
+            )
+
+        # 2. Dead optimizer block must be absent from save_all_outputs
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "save_all_outputs":
+                func_src = ast.get_source_segment(src, node) or ""
+                if "StatisticalThresholdOptimizer" in func_src:
+                    issues.append(
+                        "StatisticalThresholdOptimizer still in save_all_outputs — "
+                        "dead post-NIfTI optimizer block not removed"
+                    )
+                break
+
+        # 3. Config must have enabled=true now that order is correct
+        enabled = cfg.get("models", {}).get("statistical_thresholds", {}).get("enabled", False)
+        if not enabled:
+            issues.append(
+                "statistical_thresholds.enabled=false — optimizer should be re-enabled "
+                "now that it runs before postprocess_segmentation"
+            )
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S6 Statistical thresholds pipeline order: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
         else:
-            result["status"] = PASS
-        print(f"  S6 Statistical thresholds disabled: {result['status']}")
-        if result["issues"]:
-            print(f"    ✗  {result['issues'][0]}")
-        else:
-            print("    statistical_thresholds.enabled=false  ✓")
+            print("    threshold_overrides injected before postprocess_segmentation  ✓")
+            print("    dead optimizer block absent from save_all_outputs  ✓")
+            print("    statistical_thresholds.enabled=true  ✓")
     except Exception as exc:
         result["status"] = FAIL
         result["issues"] = [str(exc)]
-        print(f"  S6 Statistical thresholds disabled: FAIL — {exc}")
+        print(f"  S6 Statistical thresholds pipeline order: FAIL — {exc}")
     return result
 
 
