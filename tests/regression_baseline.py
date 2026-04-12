@@ -1173,6 +1173,89 @@ def test_s9_roi_fallback_flag() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S10 — Subregion ensemble CT boost removed smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s10_subregion_ensemble_no_ct_boost() -> dict:
+    """Fix 11 gate: run_subregion_weighted_ensemble must not contain a CT boost path."""
+    result = {"test": "S10_subregion_ensemble_no_ct_boost", "status": SKIP, "issues": []}
+    try:
+        from pathlib import Path
+        src = (
+            Path(__file__).resolve().parent.parent /
+            "pybrain" / "models" / "subregion_ensemble.py"
+        ).read_text()
+        issues = []
+        if "apply_ct_boost_to_ensemble" in src:
+            issues.append(
+                "apply_ct_boost_to_ensemble still present in subregion_ensemble.py — "
+                "third CT boost path not removed"
+            )
+        if "ct_data" in src and "ct_config" in src:
+            issues.append(
+                "ct_data/ct_config parameters still present in subregion_ensemble.py — "
+                "latent CT double-boost path not eliminated"
+            )
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S10 Subregion ensemble CT boost: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print("    apply_ct_boost_to_ensemble absent  ✓")
+            print("    ct_data/ct_config parameters absent  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S10 Subregion ensemble CT boost: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S11 — save_all_outputs dead uncertainty recomputation removed smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s11_no_uncertainty_recompute_in_save() -> dict:
+    """Fix 12 gate: save_all_outputs must not call compute_uncertainty internally."""
+    result = {"test": "S11_no_uncertainty_recompute_in_save", "status": SKIP, "issues": []}
+    try:
+        import ast
+        from pathlib import Path
+        src = (
+            Path(__file__).resolve().parent.parent /
+            "scripts" / "3_brain_tumor_analysis.py"
+        ).read_text()
+
+        # Find the save_all_outputs function body and check for compute_uncertainty calls
+        tree = ast.parse(src)
+        issues = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "save_all_outputs":
+                func_src = ast.get_source_segment(src, node) or ""
+                if "compute_uncertainty" in func_src:
+                    issues.append(
+                        "save_all_outputs still calls compute_uncertainty internally — "
+                        "dead recomputation overwrites the correctly-computed value passed as parameter"
+                    )
+                break
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S11 No uncertainty recompute in save_all_outputs: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print("    compute_uncertainty not called inside save_all_outputs  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S11 No uncertainty recompute in save_all_outputs: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1333,6 +1416,16 @@ def main():
     # ── S9: ROI localisation fallback flag (Fix 10 gate) ────────────────────
     print("[S9] ROI localisation fallback flag smoke test...")
     results.append(test_s9_roi_fallback_flag())
+    print()
+
+    # ── S10: Subregion ensemble CT boost removed (Fix 11 gate) ──────────────
+    print("[S10] Subregion ensemble CT boost removed smoke test...")
+    results.append(test_s10_subregion_ensemble_no_ct_boost())
+    print()
+
+    # ── S11: No uncertainty recompute in save_all_outputs (Fix 12 gate) ─────
+    print("[S11] Dead uncertainty recomputation removed smoke test...")
+    results.append(test_s11_no_uncertainty_recompute_in_save())
     print()
 
     sr_prob = None

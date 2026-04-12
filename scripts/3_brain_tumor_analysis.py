@@ -685,7 +685,7 @@ def fuse_ensemble(
         
         logger.info("Using subregion-specific ensemble weights")
         ensemble_prob, contributed = run_subregion_weighted_ensemble(
-            model_list, subregion_weights, ct_data=None, ct_config=None
+            model_list, subregion_weights
         )
         
     else:
@@ -1494,52 +1494,12 @@ def save_all_outputs(
         'et': config.thresholds.get("et", 0.35)
     }
     
-    if config.models.get("statistical_thresholds", {}).get("enabled", False):
-        logger.info("Applying statistical threshold optimization...")
-        
-        # Compute uncertainty for adaptive thresholding
-        uncertainty = compute_uncertainty(ensemble_prob, model_probs_list or [])
-        
-        from pybrain.utils.threshold_optimizer import (
-            StatisticalThresholdOptimizer,
-            adaptive_threshold_from_uncertainty
-        )
-        
-        # Initialize optimizer with clinical safety bounds
-        threshold_cfg = config.models.get("statistical_thresholds", {})
-        clinical_bounds = threshold_cfg.get("clinical_bounds") or {
-            'wt': (0.30, 0.70),
-            'tc': (0.25, 0.65),
-            'et': (0.20, 0.60)
-        }
-        optimizer = StatisticalThresholdOptimizer(
-            clinical_bounds=clinical_bounds,
-            uncertainty_weight=threshold_cfg.get("uncertainty_weight", 0.1)
-        )
-        
-        # Apply uncertainty-based adaptive thresholding
-        if threshold_cfg.get("adaptive_uncertainty", True):
-            adapted_thresholds = adaptive_threshold_from_uncertainty(
-                ensemble_prob, uncertainty, final_thresholds, clinical_bounds
-            )
-            logger.info(f"Adapted thresholds: {adapted_thresholds}")
-            
-            # Validate clinical safety
-            safety_results = optimizer.validate_clinical_safety(
-                adapted_thresholds, ensemble_prob, brain_mask
-            )
-            
-            # Use adapted thresholds if safe, otherwise fall back to base
-            for region in ['tc', 'wt', 'et']:
-                region_result = safety_results.get(region, {})
-                if isinstance(region_result, dict) and region_result.get('safe', False):
-                    final_thresholds[region] = adapted_thresholds[region]
-                    logger.info(f"{region.upper()}: Using adapted threshold")
-                else:
-                    logger.warning(f"{region.upper()}: Safety check failed, using base threshold")
-    else:
-        uncertainty = compute_uncertainty(ensemble_prob, model_probs_list or []) if model_probs_list else np.zeros_like(ensemble_prob)
-    
+    # statistical_thresholds is disabled (enabled=false in defaults.yaml).
+    # The optimizer block ran after NIfTIs were written — a silent no-op.
+    # It is kept here for future re-enablement once the pipeline order is
+    # restructured, but it must remain disabled until then.
+    # The uncertainty parameter passed in is used directly; no recomputation.
+
     # Save ensemble probabilities and uncertainty
     save_nifti(
         ensemble_prob,

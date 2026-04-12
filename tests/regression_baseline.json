@@ -77,6 +77,16 @@
       "issues": []
     },
     {
+      "test": "S10_subregion_ensemble_no_ct_boost",
+      "status": "PASS",
+      "issues": []
+    },
+    {
+      "test": "S11_no_uncertainty_recompute_in_save",
+      "status": "PASS",
+      "issues": []
+    },
+    {
       "test": "T1_segresnet_range",
       "issues": [],
       "stats": {
@@ -130,13 +140,13 @@
           128,
           128
         ],
-        "min": 3.2906971227930626e-06,
-        "max": 0.999998927116394,
-        "mean": 0.5070931911468506,
-        "std": 0.14042596518993378,
-        "ch0_mean": 0.4300517141819,
-        "ch1_mean": 0.5636066794395447,
-        "ch2_mean": 0.5276218056678772
+        "min": 4.0690198943593714e-07,
+        "max": 1.0,
+        "mean": 0.520600438117981,
+        "std": 0.12968777120113373,
+        "ch0_mean": 0.574897825717926,
+        "ch1_mean": 0.4976118206977844,
+        "ch2_mean": 0.48929235339164734
       }
     },
     {
@@ -196,7 +206,7 @@
     }
   ],
   "summary": {
-    "PASS": 16,
+    "PASS": 18,
     "FAIL": 0,
     "SKIP": 0,
     "WARN": 2
