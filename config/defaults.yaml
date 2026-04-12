@@ -1,0 +1,81 @@
+# pybrain/config/defaults.yaml
+# Default thresholds and clinical weights for Brain Tumor Analysis
+
+thresholds:
+  wt: 0.35
+  tc: 0.35
+  et: 0.35
+  # Adaptive fallbacks
+  min_wt: 0.20
+  min_tc: 0.25
+
+ensemble_weights:
+  segresnet: 0.4
+  tta4: 0.3
+  swinunetr: 0.3
+
+clinical:
+  core_min_ratio: 0.05
+  entropy_warn: 0.70
+  match_tolerance: 0.20
+
+ct_boost:
+  hu_min: 25
+  hu_max: 60
+  weight: 0.15
+
+labels:
+  1: "Necrotic core"
+  2: "Edema"
+  3: "Enhancing tumor"
+
+models:
+  preprocessing:
+    histogram_normalize: false
+    bilateral_filter: false
+    denoise_strength: 0.05
+  segresnet:
+    roi_size: [240, 240, 160]
+    overlap: 0.5
+  tta4:
+    roi_size: [240, 240, 160]
+    overlap: 0.5
+    enhanced_tta: true
+    tta_config:
+      enable_flips: true
+      enable_rotations: true
+      enable_scaling: false
+      enable_intensity: false
+      rotation_angles: [90, 180, 270]
+      scale_factors: [0.9, 1.1]
+  swinunetr:
+    weights: "fold1_swin_unetr.pth" # fold4 weights mapped to this name
+    roi_size: [128, 128, 128]
+    overlap: 0.5
+    fallback_overlap: 0.25
+  statistical_thresholds:
+    enabled: true
+    adaptive_uncertainty: true
+    uncertainty_weight: 0.1
+    clinical_bounds:
+      wt: [0.30, 0.70]
+      tc: [0.25, 0.65]
+      et: [0.20, 0.60]
+  staple_ensemble:
+    enabled: false
+    subregion_weights:
+      # Optional subregion-specific weights (will be blended with STAPLE)
+      # Format: {model_name: weight}
+      # Example for WT channel (edema boundaries):
+      #   swinunetr: 1.2
+      #   segresnet: 1.0
+      #   tta4: 0.8
+  mc_dropout:
+    enabled: false
+    n_samples: 20
+    models: ["segresnet", "swinunetr"]  # Models to apply MC-Dropout to
+    # MC-Dropout provides calibrated uncertainty suitable for FDA/CE-MDR reporting
+
+visualizations:
+  generate_animation: true # Can be 270MB+
+  auto_open: true
