@@ -17,6 +17,7 @@ import os
 import json
 import subprocess
 import threading
+from collections import defaultdict
 from pathlib import Path
 from datetime import datetime
 
@@ -961,8 +962,7 @@ def run_pipeline(sess):
                         and x.suffix in (".gz",".json",".html",
                                          ".png",".pdf",".txt")])
         # Group by subfolder
-        from collections import defaultdict as _dd
-        by_dir = _dd(list)
+        by_dir = defaultdict(list)
         for item in items:
             rel = item.relative_to(out)
             parts = rel.parts
