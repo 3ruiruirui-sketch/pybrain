@@ -707,6 +707,72 @@ def test_s1_preprocessing_config() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S2 — WT threshold consistency smoke test (static source analysis)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s2_wt_threshold_consistency() -> dict:
+    """
+    Phase 2 gate: verifies that the WT threshold fallback is 0.35 everywhere
+    in 3_brain_tumor_analysis.py.
+
+    Root cause being tested: before Phase 2 the fallback was 0.45 in two
+    separate final_thresholds dicts while defaults.yaml specifies wt=0.35.
+    Running without a config file (bare Python) would silently use 0.45,
+    making WT volume measurements non-reproducible.
+
+    Uses grep-style source scan — no model imports, no data required.
+    """
+    result = {"test": "S2_wt_threshold_consistency", "status": SKIP, "issues": []}
+    try:
+        from pathlib import Path
+        import re
+
+        script = Path(__file__).resolve().parent.parent / "scripts" / "3_brain_tumor_analysis.py"
+        if not script.exists():
+            result["status"] = FAIL
+            result["issues"] = [f"Script not found: {script}"]
+            print(f"  S2 WT threshold: FAIL — script not found")
+            return result
+
+        src = script.read_text()
+        issues = []
+
+        # Find every line that sets 'wt': config.thresholds.get("wt", <N>)
+        # and verify the fallback is 0.35, not 0.45 or anything else.
+        pattern = re.compile(r"['\"]wt['\"].*?config\.thresholds\.get\(['\"]wt['\"],\s*([\d.]+)\)")
+        for m in pattern.finditer(src):
+            fallback = float(m.group(1))
+            if fallback != 0.35:
+                lineno = src[:m.start()].count("\n") + 1
+                issues.append(
+                    f"line {lineno}: WT fallback={fallback} — expected 0.35 "
+                    f"(inconsistent with defaults.yaml wt: 0.35)"
+                )
+
+        # Also verify no bare 0.45 fallback remains in final_thresholds dicts
+        for lineno, line in enumerate(src.splitlines(), start=1):
+            if "final_thresholds" in line and "0.45" in line:
+                issues.append(
+                    f"line {lineno}: final_thresholds contains 0.45 — "
+                    "stale hardcoded WT threshold"
+                )
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S2 WT threshold consistency: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print("    WT fallback=0.35 in all final_thresholds dicts  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S2 WT threshold consistency: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -827,6 +893,11 @@ def main():
     # ── S1: Preprocessing config smoke test (Phase 1 gate) ──────────────────
     print("[S1] Preprocessing config smoke test...")
     results.append(test_s1_preprocessing_config())
+    print()
+
+    # ── S2: WT threshold consistency smoke test (Phase 2 gate) ──────────────
+    print("[S2] WT threshold consistency smoke test...")
+    results.append(test_s2_wt_threshold_consistency())
     print()
 
     sr_prob = None
