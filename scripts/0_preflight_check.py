@@ -318,11 +318,17 @@ class Preflight:
         if "SEG" in self.vols:
             seg_data = self.vols["SEG"].get_fdata().astype(np.uint8)
             unique_labels = np.unique(seg_data)
-            # BraTS 2021 labels: 0=background, 1=NCR, 2=ED, 4=ET (label 3 not used)
-            if not all(l in [0, 1, 2, 4] for l in unique_labels):
-                self.log("QUALITY", "SEG labels", "ERROR", f"Invalid labels found: {unique_labels}")
+            # Two valid label conventions:
+            #   Pipeline output:  {0,1,2,3}  — ET=3 (internal convention)
+            #   BraTS 2021 GT:    {0,1,2,4}  — ET=4 (label 3 absent in training data)
+            valid_pipeline = all(l in [0, 1, 2, 3] for l in unique_labels)
+            valid_brats_gt = all(l in [0, 1, 2, 4] for l in unique_labels)
+            if valid_pipeline:
+                self.log("QUALITY", "SEG labels", "OK", "Labels in {0,1,2,3} (pipeline output)")
+            elif valid_brats_gt:
+                self.log("QUALITY", "SEG labels", "OK", "Labels in {0,1,2,4} (BraTS 2021 GT)")
             else:
-                self.log("QUALITY", "SEG labels", "OK", "Labels in {0,1,2,4} (BraTS 2021)")
+                self.log("QUALITY", "SEG labels", "ERROR", f"Invalid labels found: {unique_labels}")
 
             # Volume
             pixdim = self.vols["SEG"].header.get_zooms()[:3]

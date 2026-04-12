@@ -30,8 +30,10 @@ ct_boost:
   hu_min: 25
   hu_max: 60
   weight: 0.15
-  # Gate A NMI (sklearn convention, range [0,1]) — used by should_apply_ct_boost
-  nmi_threshold: 0.3
+  # Gate A NMI (Studholme-style, range [1,∞]) — used by should_apply_ct_boost
+  # Formula: (H_x+H_y)/H_xy. Well-aligned brain MRI-CT pairs typically ≥1.3.
+  # Updated from 0.3 (stale: was calibrated against the old inverted formula).
+  nmi_threshold: 1.3
   # Gate B NMI (Studholme convention, range [1,2]) — used by _compute_nmi internally
   # These are DIFFERENT scales and must NOT share the same key or value.
   nmi_threshold_internal: 1.05
@@ -76,7 +78,10 @@ models:
       tc: [0.25, 0.65]
       et: [0.20, 0.60]
   staple_ensemble:
-    enabled: true
+    enabled: false  # Requires ≥2 statistically independent models.
+    # segresnet + tta4 share the same bundle weights — not independent.
+    # Re-enable only when SwinUNETR (or another model with distinct weights)
+    # is added and its ensemble_weights entry is > 0.0.
     subregion_weights:
       # Optional subregion-specific weights (will be blended with STAPLE)
       # Format: {model_name: weight}

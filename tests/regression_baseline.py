@@ -927,14 +927,13 @@ def test_s5_nmi_gates_and_uncertainty_call() -> dict:
     Phase 6 gate: two checks.
 
     Check A — CT NMI dual-gate scale separation:
-      apply_ct_boost contains two NMI gates using different scales.
-      Gate A (should_apply_ct_boost) uses sklearn [0,1] NMI, key nmi_threshold.
-      Gate B (_compute_nmi) uses Studholme [1,2] NMI, key nmi_threshold_internal.
-      Before Phase 6 both gates read the same key: setting nmi_threshold=0.3
-      meant Gate B threshold was 0.3, which is below any real Studholme score
-      and caused the internal gate to skip the boost on every case.
+      Both NMI gates now use the Studholme formula (H_x+H_y)/H_xy, range [1,∞).
+      Gate A (should_apply_ct_boost) uses key nmi_threshold (corrected to 1.3).
+      Gate B (_compute_nmi internally) uses key nmi_threshold_internal (1.05).
+      The old nmi_threshold=0.3 was stale from the inverted formula and
+      unconditionally passed every CT-MRI pair. After the fix both keys must be ≥1.0.
       Verify: source uses nmi_threshold_internal for Gate B, and defaults.yaml
-      has both keys with correct defaults (0.3 and 1.05 respectively).
+      has both keys with correct Studholme-scale defaults (≥1.0).
 
     Check B — double compute_uncertainty removed:
       Before Phase 6 compute_uncertainty was called at line ~1709 with a fake
@@ -972,11 +971,11 @@ def test_s5_nmi_gates_and_uncertainty_call() -> dict:
         gate_b = ct.get("nmi_threshold_internal")
 
         if gate_a is None:
-            issues.append("defaults.yaml ct_boost missing nmi_threshold (Gate A, sklearn [0,1])")
-        elif not (0.0 < gate_a < 1.0):
+            issues.append("defaults.yaml ct_boost missing nmi_threshold (Gate A)")
+        elif gate_a < 1.0:
             issues.append(
-                f"ct_boost.nmi_threshold={gate_a} is outside sklearn [0,1] range — "
-                "wrong scale for Gate A"
+                f"ct_boost.nmi_threshold={gate_a} < 1.0 — stale value from old inverted NMI formula; "
+                "corrected formula (H_x+H_y)/H_xy returns ≥1.0, threshold must also be ≥1.0"
             )
 
         if gate_b is None:
@@ -987,10 +986,10 @@ def test_s5_nmi_gates_and_uncertainty_call() -> dict:
                 "wrong scale for Gate B"
             )
 
-        if gate_a is not None and gate_b is not None and gate_a == gate_b:
+        if gate_a is not None and gate_b is not None and gate_a < gate_b:
             issues.append(
-                f"ct_boost.nmi_threshold == nmi_threshold_internal == {gate_a} — "
-                "same value on different scales means at least one gate is wrong"
+                f"ct_boost.nmi_threshold={gate_a} < nmi_threshold_internal={gate_b} — "
+                "Gate A should be at least as strict as Gate B"
             )
 
         # ── Check B: premature compute_uncertainty removed ────────────────────
@@ -1372,10 +1371,16 @@ def test_s13_staple_fixes() -> dict:
         src  = (root / "pybrain" / "models" / "staple_ensemble.py").read_text()
         issues = []
 
-        # 1. staple_ensemble.enabled must be true
+        # 1. staple_ensemble.enabled must be FALSE when only same-weight models present.
+        # segresnet + tta4 share the same brats_mri_segmentation bundle weights —
+        # STAPLE requires statistically independent annotators; using correlated
+        # inputs produces unstable EM convergence.
         enabled = cfg.get("models", {}).get("staple_ensemble", {}).get("enabled", False)
-        if not enabled:
-            issues.append("staple_ensemble.enabled=false — STAPLE not active")
+        if enabled:
+            issues.append(
+                "staple_ensemble.enabled=true — unsafe: segresnet+tta4 share weights "
+                "and are not statistically independent; STAPLE EM will be unstable"
+            )
 
         # 2. Vectorised implementation: must NOT contain 'for v in range(n_voxels)'
         if "for v in range(n_voxels)" in src:
@@ -1420,7 +1425,7 @@ def test_s13_staple_fixes() -> dict:
             for iss in issues:
                 print(f"    ✗  {iss}")
         else:
-            print("    staple_ensemble.enabled=true  ✓")
+            print("    staple_ensemble.enabled=false (correctly disabled for correlated models)  ✓")
             print("    _compute_truth_probability vectorised  ✓")
             print("    validate_staple_weights checks active models only  ✓")
             print(f"    validate_staple_weights(2-model)=True  ✓")
