@@ -786,12 +786,16 @@ def apply_ct_boost(
     if volumes is not None:
         t1 = volumes.get("T1")
         if t1 is not None and t1.shape == ct_data.shape:
-            nmi       = _compute_nmi(ct_data, t1)
-            nmi_thresh = boost_cfg.get("nmi_threshold", 1.05)
-            logger.info(f"  CT–MRI NMI = {nmi:.4f}  (threshold = {nmi_thresh:.4f})")
-            if nmi < nmi_thresh:
+            nmi = _compute_nmi(ct_data, t1)
+            # _compute_nmi uses the Studholme convention: 2*(Hx+Hy)/(Hx+Hy+Hxy),
+            # range [1.0, 2.0].  This is a DIFFERENT scale from the sklearn [0,1]
+            # NMI used by Gate A above.  Use a separate config key so both gates
+            # can be tuned independently without breaking each other.
+            nmi_thresh_internal = boost_cfg.get("nmi_threshold_internal", 1.05)
+            logger.info(f"  CT–MRI NMI (Studholme) = {nmi:.4f}  (threshold = {nmi_thresh_internal:.4f})")
+            if nmi < nmi_thresh_internal:
                 logger.warning(
-                    f"CT boost skipped: NMI {nmi:.4f} < {nmi_thresh:.4f}. "
+                    f"CT boost skipped: Studholme NMI {nmi:.4f} < {nmi_thresh_internal:.4f}. "
                     "Poor CT–MRI registration."
                 )
                 return ensemble_prob
@@ -1700,15 +1704,11 @@ def main() -> None:
         _gpu_cache_clear(config.model_device)
 
         # ── Ensemble fusion ───────────────────────────────────────────────────
-        # Compute uncertainty before ensemble if subregion weights might be adaptive
-        uncertainty = None
-        if getattr(config, 'subregion_ensemble_weights', {}).get('adaptive', False):
-            prob_list = [model_probs[n] for n in model_probs.keys() if n in model_probs]
-            # Use first model's probability as temporary ensemble for uncertainty computation
-            temp_ensemble = prob_list[0] if prob_list else np.zeros((3, 128, 128, 128))
-            uncertainty = compute_uncertainty(temp_ensemble, prob_list)  # Will be recomputed after ensemble
-        
-        ensemble_prob, contributed = fuse_ensemble(model_probs, config, uncertainty=uncertainty)
+        # uncertainty is computed correctly after ensemble fusion (line ~1755).
+        # A premature call here used prob_list[0] as a fake ensemble, which was
+        # always overwritten.  Pass None; fuse_ensemble only uses it when
+        # adaptive subregion weights are enabled (default: False).
+        ensemble_prob, contributed = fuse_ensemble(model_probs, config, uncertainty=None)
         logger.info(f"Ensemble fusion using: {', '.join(contributed)}")
 
         # ── CT boost ──────────────────────────────────────────────────────────

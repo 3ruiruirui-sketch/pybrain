@@ -23,6 +23,11 @@ ct_boost:
   hu_min: 25
   hu_max: 60
   weight: 0.15
+  # Gate A NMI (sklearn convention, range [0,1]) — used by should_apply_ct_boost
+  nmi_threshold: 0.3
+  # Gate B NMI (Studholme convention, range [1,2]) — used by _compute_nmi internally
+  # These are DIFFERENT scales and must NOT share the same key or value.
+  nmi_threshold_internal: 1.05
 
 labels:
   1: "Necrotic core"

@@ -918,6 +918,107 @@ def test_s4_run_models_precomputed() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S5 — CT NMI dual-gate + double compute_uncertainty smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s5_nmi_gates_and_uncertainty_call() -> dict:
+    """
+    Phase 6 gate: two checks.
+
+    Check A — CT NMI dual-gate scale separation:
+      apply_ct_boost contains two NMI gates using different scales.
+      Gate A (should_apply_ct_boost) uses sklearn [0,1] NMI, key nmi_threshold.
+      Gate B (_compute_nmi) uses Studholme [1,2] NMI, key nmi_threshold_internal.
+      Before Phase 6 both gates read the same key: setting nmi_threshold=0.3
+      meant Gate B threshold was 0.3, which is below any real Studholme score
+      and caused the internal gate to skip the boost on every case.
+      Verify: source uses nmi_threshold_internal for Gate B, and defaults.yaml
+      has both keys with correct defaults (0.3 and 1.05 respectively).
+
+    Check B — double compute_uncertainty removed:
+      Before Phase 6 compute_uncertainty was called at line ~1709 with a fake
+      ensemble (prob_list[0]), result immediately overwritten at line ~1755.
+      Verify: the early call with 'temp_ensemble' and 'Will be recomputed'
+      comment is absent from source.
+
+    Pure source + config scan. No model inference.
+    """
+    result = {"test": "S5_nmi_gates_and_uncertainty_call", "status": SKIP, "issues": []}
+    try:
+        import re, yaml
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        script = root / "scripts" / "3_brain_tumor_analysis.py"
+        cfg_path = root / "config" / "defaults.yaml"
+
+        issues = []
+        src = script.read_text()
+
+        # ── Check A: Gate B uses nmi_threshold_internal ───────────────────────
+        if "nmi_threshold_internal" not in src:
+            issues.append(
+                "apply_ct_boost still uses 'nmi_threshold' for the internal "
+                "Studholme NMI gate — dual-gate scale conflict not resolved"
+            )
+
+        # defaults.yaml must have both keys
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f)
+        ct = cfg.get("ct_boost", {})
+
+        gate_a = ct.get("nmi_threshold")
+        gate_b = ct.get("nmi_threshold_internal")
+
+        if gate_a is None:
+            issues.append("defaults.yaml ct_boost missing nmi_threshold (Gate A, sklearn [0,1])")
+        elif not (0.0 < gate_a < 1.0):
+            issues.append(
+                f"ct_boost.nmi_threshold={gate_a} is outside sklearn [0,1] range — "
+                "wrong scale for Gate A"
+            )
+
+        if gate_b is None:
+            issues.append("defaults.yaml ct_boost missing nmi_threshold_internal (Gate B, Studholme [1,2])")
+        elif not (1.0 <= gate_b <= 2.0):
+            issues.append(
+                f"ct_boost.nmi_threshold_internal={gate_b} is outside Studholme [1,2] range — "
+                "wrong scale for Gate B"
+            )
+
+        if gate_a is not None and gate_b is not None and gate_a == gate_b:
+            issues.append(
+                f"ct_boost.nmi_threshold == nmi_threshold_internal == {gate_a} — "
+                "same value on different scales means at least one gate is wrong"
+            )
+
+        # ── Check B: premature compute_uncertainty removed ────────────────────
+        if "temp_ensemble" in src or "Will be recomputed after ensemble" in src:
+            issues.append(
+                "Premature compute_uncertainty call still present in main() ensemble block — "
+                "early call uses prob_list[0] as fake ensemble and is overwritten 46 lines later"
+            )
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        result["nmi_threshold_gate_a"]  = gate_a
+        result["nmi_threshold_gate_b"]  = gate_b
+        print(f"  S5 NMI gates + uncertainty call: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print(f"    Gate A (sklearn):   nmi_threshold={gate_a}  ✓")
+            print(f"    Gate B (Studholme): nmi_threshold_internal={gate_b}  ✓")
+            print(f"    Premature compute_uncertainty call absent  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S5 NMI gates + uncertainty call: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1053,6 +1154,11 @@ def main():
     # ── S4: run_models precomputed pass-through smoke test (Phase 4 gate) ───
     print("[S4] run_models precomputed pass-through smoke test...")
     results.append(test_s4_run_models_precomputed())
+    print()
+
+    # ── S5: CT NMI dual-gate + double uncertainty call (Phase 6 gate) ───────
+    print("[S5] CT NMI dual-gate + double compute_uncertainty smoke test...")
+    results.append(test_s5_nmi_gates_and_uncertainty_call())
     print()
 
     sr_prob = None
