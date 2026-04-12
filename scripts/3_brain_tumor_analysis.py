@@ -460,8 +460,8 @@ def preprocess_volumes(
     Order: (1) Histogram-normalise → (2) Bilateral filter → (3) Robust z-score.
     """
     pre_cfg      = config.models.get("preprocessing", {})
-    do_hist      = pre_cfg.get("histogram_normalize", True)
-    do_bilateral = pre_cfg.get("bilateral_filter", True)
+    do_hist      = pre_cfg.get("histogram_normalize", False)
+    do_bilateral = pre_cfg.get("bilateral_filter", False)
     logger       = get_logger("pybrain")
 
     first_shape = next(iter(volumes.values())).shape
