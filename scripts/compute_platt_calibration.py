@@ -91,12 +91,12 @@ def preprocess_brats_case(case_dir: Path) -> Tuple[torch.Tensor, np.ndarray, np.
     """
     cid = case_dir.name
     volumes = {
-        "FLAIR": nib.load(str(case_dir / f"{cid}_flair.nii.gz")).get_fdata().astype(np.float32),
-        "T1":    nib.load(str(case_dir / f"{cid}_t1.nii.gz")).get_fdata().astype(np.float32),
-        "T1c":   nib.load(str(case_dir / f"{cid}_t1ce.nii.gz")).get_fdata().astype(np.float32),
-        "T2":    nib.load(str(case_dir / f"{cid}_t2.nii.gz")).get_fdata().astype(np.float32),
+        "FLAIR": nib.load(str(case_dir / f"{cid}_flair.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
+        "T1":    nib.load(str(case_dir / f"{cid}_t1.nii.gz")).get_fdata().astype(np.float32),    # type: ignore[union-attr]
+        "T1c":   nib.load(str(case_dir / f"{cid}_t1ce.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
+        "T2":    nib.load(str(case_dir / f"{cid}_t2.nii.gz")).get_fdata().astype(np.float32),    # type: ignore[union-attr]
     }
-    seg = nib.load(str(case_dir / f"{cid}_seg.nii.gz")).get_fdata().astype(np.int32)
+    seg = nib.load(str(case_dir / f"{cid}_seg.nii.gz")).get_fdata().astype(np.int32)  # type: ignore[union-attr]
 
     brain_mask = make_brain_mask(volumes)
 
@@ -179,6 +179,9 @@ def main() -> None:
     parser.add_argument("--device",     default="cpu",  type=str)
     parser.add_argument("--out_dir",    default="models/calibration", type=Path)
     parser.add_argument("--seed",       default=42,     type=int)
+    parser.add_argument("--skip_swinunetr", action="store_true",
+                        help="Skip SwinUNETR inference (much faster; Platt fitted on SegResNet only). "
+                             "Use when SwinUNETR Dice on full volumes is low or inference is too slow.")
     args = parser.parse_args()
 
     setup_logging()
@@ -216,10 +219,14 @@ def main() -> None:
 
     # Accumulators for per-model Dice
     dice_records: List[dict] = []
+    active_models = ["segresnet", "ensemble"] if args.skip_swinunetr else ["segresnet", "swinunetr", "ensemble"]
     per_model_dice: Dict[str, Dict[str, List[float]]] = {
         m: {c: [] for c in channel_names}
-        for m in ["segresnet", "swinunetr", "ensemble"]
+        for m in active_models
     }
+    if args.skip_swinunetr:
+        logger.info("--skip_swinunetr: SwinUNETR inference will be skipped. "
+                    "Platt coefficients fitted on SegResNet ensemble only.")
 
     # ── Per-case loop ─────────────────────────────────────────────────────────
     for case_idx, case_dir in enumerate(cases):
@@ -234,6 +241,7 @@ def main() -> None:
 
         input_tensor = input_tensor.to(device)
         model_probs: Dict[str, np.ndarray] = {}
+        sw_prob = None
 
         # ── SegResNet ─────────────────────────────────────────────────────────
         logger.info("  Running SegResNet...")
@@ -242,10 +250,13 @@ def main() -> None:
             model_probs["segresnet"] = sr_prob
 
         # ── SwinUNETR ─────────────────────────────────────────────────────────
-        logger.info("  Running SwinUNETR...")
-        sw_prob = run_single_model("swinunetr", input_tensor, device, args.bundle_dir, sw_cfg)
-        if sw_prob is not None:
-            model_probs["swinunetr"] = sw_prob
+        if not args.skip_swinunetr:
+            logger.info("  Running SwinUNETR...")
+            sw_prob = run_single_model("swinunetr", input_tensor, device, args.bundle_dir, sw_cfg)
+            if sw_prob is not None:
+                model_probs["swinunetr"] = sw_prob
+        else:
+            logger.info("  SwinUNETR skipped (--skip_swinunetr)")
 
         if not model_probs:
             logger.warning("  No models succeeded — skipping case")
@@ -325,7 +336,7 @@ def main() -> None:
 
         clf = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
         clf.fit(p_all.reshape(-1, 1), gt_all)
-        A = float(clf.coef_[0][0])
+        A = float(clf.coef_[0][0])  # type: ignore[index]
         B = float(clf.intercept_[0])
         platt_coefficients[ch_name] = {"A": A, "B": B}
         logger.info(f"  {ch_name.upper()}: A={A:.4f}  B={B:.4f}")
@@ -347,7 +358,8 @@ def main() -> None:
 
     # Overall weight = mean Dice across all 3 channels
     model_overall: Dict[str, float] = {}
-    for model_name in ["segresnet", "swinunetr"]:
+    measured_models = ["segresnet"] if args.skip_swinunetr else ["segresnet", "swinunetr"]
+    for model_name in measured_models:
         if model_name in mean_dice:
             scores_all = [mean_dice[model_name][c] for c in channel_names if c in mean_dice[model_name]]
             model_overall[model_name] = float(np.mean(scores_all)) if scores_all else 0.0
@@ -356,6 +368,10 @@ def main() -> None:
     normalised_weights = {m: round(v / total, 4) for m, v in model_overall.items()}
     # TTA-4 not run independently here — assign same weight as SegResNet as a safe default
     normalised_weights["tta4"] = normalised_weights.get("segresnet", 0.33)
+    if args.skip_swinunetr:
+        # SwinUNETR not measured — set to 0.0 pending a full measurement run
+        normalised_weights["swinunetr"] = 0.0
+        logger.info("swinunetr weight set to 0.0 (not measured — rerun without --skip_swinunetr to measure)")
     # Re-normalise
     total2 = sum(normalised_weights.values()) + 1e-8
     normalised_weights = {m: round(v / total2, 4) for m, v in normalised_weights.items()}
