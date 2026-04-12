@@ -1256,6 +1256,61 @@ def test_s11_no_uncertainty_recompute_in_save() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S12 — nnU-Net weight=0.0 when weights absent smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s12_nnunet_weight_zero_without_weights() -> dict:
+    """
+    Problem E gate: ensemble_weights.nnunet must be 0.0 when:
+      (a) models.nnunet.enabled is false, OR
+      (b) models/brats_bundle/nnunet_weights.pth does not exist.
+    A non-zero weight with no pretrained checkpoint contributes random noise
+    to every voxel prediction.
+    """
+    result = {"test": "S12_nnunet_weight_zero_without_weights", "status": SKIP, "issues": []}
+    try:
+        import yaml
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        cfg = yaml.safe_load((root / "config" / "defaults.yaml").read_text())
+
+        nnunet_weight  = cfg.get("ensemble_weights", {}).get("nnunet", 1.0)
+        nnunet_enabled = cfg.get("models", {}).get("nnunet", {}).get("enabled", False)
+        weights_exist  = (root / "models" / "brats_bundle" / "nnunet_weights.pth").exists()
+
+        issues = []
+        if not weights_exist and nnunet_weight > 0.0:
+            issues.append(
+                f"ensemble_weights.nnunet={nnunet_weight} but nnunet_weights.pth is absent — "
+                "random-initialization model contributes noise to every prediction. "
+                "Set ensemble_weights.nnunet=0.0 until validated weights are downloaded."
+            )
+        if nnunet_enabled and not weights_exist:
+            issues.append(
+                "models.nnunet.enabled=true but nnunet_weights.pth is absent — "
+                "nnU-Net will run on random initialization. "
+                "Either disable it or provide pretrained weights."
+            )
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S12 nnU-Net weight/weights guard: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            wt_str = f"weight={nnunet_weight}"
+            en_str = f"enabled={nnunet_enabled}"
+            wp_str = "weights=present" if weights_exist else "weights=absent (ok, weight=0.0)"
+            print(f"    {wt_str}  {en_str}  {wp_str}  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S12 nnU-Net weight/weights guard: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1426,6 +1481,11 @@ def main():
     # ── S11: No uncertainty recompute in save_all_outputs (Fix 12 gate) ─────
     print("[S11] Dead uncertainty recomputation removed smoke test...")
     results.append(test_s11_no_uncertainty_recompute_in_save())
+    print()
+
+    # ── S12: nnU-Net weight=0.0 when weights absent (Problem E gate) ─────────
+    print("[S12] nnU-Net weight/weights guard smoke test...")
+    results.append(test_s12_nnunet_weight_zero_without_weights())
     print()
 
     sr_prob = None

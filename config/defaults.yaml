@@ -13,6 +13,12 @@ ensemble_weights:
   segresnet: 0.4
   tta4: 0.3
   swinunetr: 0.3
+  # nnunet weight is 0.0 until pretrained weights are available.
+  # Without nnunet_weights.pth the model runs on random initialization —
+  # contributing pure noise to every voxel.  Set to 0.20 only after
+  # placing validated BraTS weights in models/brats_bundle/nnunet_weights.pth
+  # and re-normalising the other weights to sum to 1.0.
+  nnunet: 0.0
 
 clinical:
   core_min_ratio: 0.05
@@ -75,6 +81,12 @@ models:
       #   swinunetr: 1.2
       #   segresnet: 1.0
       #   tta4: 0.8
+  nnunet:
+    enabled: false
+    # weight: do NOT enable before placing pretrained weights at
+    # models/brats_bundle/nnunet_weights.pth.  See ensemble_weights.nnunet.
+    roi_size: [128, 128, 128]
+    overlap: 0.5
   mc_dropout:
     enabled: false
     n_samples: 20
