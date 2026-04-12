@@ -1349,6 +1349,89 @@ def test_s12_nnunet_weight_zero_without_weights() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# S13 — STAPLE ensemble fixes smoke test (Problem D)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_s13_staple_fixes() -> dict:
+    """
+    Problem D gate:
+      1. validate_staple_weights only checks active models (not zero-weight ones).
+      2. _compute_truth_probability is vectorised (no per-voxel Python loop).
+      3. staple_ensemble.enabled=true in config.
+      4. STAPLE actually returns True for a 2-model ensemble with equal weights.
+    """
+    result = {"test": "S13_staple_fixes", "status": SKIP, "issues": []}
+    try:
+        import yaml
+        import numpy as np
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+
+        cfg  = yaml.safe_load((root / "config" / "defaults.yaml").read_text())
+        src  = (root / "pybrain" / "models" / "staple_ensemble.py").read_text()
+        issues = []
+
+        # 1. staple_ensemble.enabled must be true
+        enabled = cfg.get("models", {}).get("staple_ensemble", {}).get("enabled", False)
+        if not enabled:
+            issues.append("staple_ensemble.enabled=false — STAPLE not active")
+
+        # 2. Vectorised implementation: must NOT contain 'for v in range(n_voxels)'
+        if "for v in range(n_voxels)" in src:
+            issues.append(
+                "_compute_truth_probability still uses per-voxel Python loop — "
+                "not vectorised; will be extremely slow on full BraTS volumes"
+            )
+
+        # 3. validate_staple_weights must reference model_probs keys not all weights
+        if "list(ensemble_weights.values())" in src:
+            issues.append(
+                "validate_staple_weights still uses list(ensemble_weights.values()) — "
+                "zero-weight models (swinunetr=0, nnunet=0) will block STAPLE"
+            )
+
+        # 4. Functional test: validate_staple_weights returns True for 2 active models
+        import sys
+        sys.path.insert(0, str(root))
+        from pybrain.models.staple_ensemble import validate_staple_weights
+        dummy_probs = {
+            "segresnet": np.random.rand(3, 16, 16, 16).astype(np.float32),
+            "tta4":      np.random.rand(3, 16, 16, 16).astype(np.float32),
+        }
+        weights = {"segresnet": 0.5, "tta4": 0.5, "swinunetr": 0.0, "nnunet": 0.0}
+        ok = validate_staple_weights(dummy_probs, weights)
+        if not ok:
+            issues.append(
+                "validate_staple_weights returned False for 2-model equal-weight ensemble "
+                "— STAPLE will always fall back to weighted ensemble"
+            )
+
+        # 5. Functional test: run_staple_ensemble completes and returns correct shape
+        from pybrain.models.staple_ensemble import run_staple_ensemble
+        out = run_staple_ensemble(dummy_probs)
+        if out.shape != (3, 16, 16, 16):
+            issues.append(f"run_staple_ensemble output shape {out.shape} != (3,16,16,16)")
+
+        result["status"] = FAIL if issues else PASS
+        result["issues"] = issues
+        print(f"  S13 STAPLE fixes: {result['status']}")
+        if issues:
+            for iss in issues:
+                print(f"    ✗  {iss}")
+        else:
+            print("    staple_ensemble.enabled=true  ✓")
+            print("    _compute_truth_probability vectorised  ✓")
+            print("    validate_staple_weights checks active models only  ✓")
+            print(f"    validate_staple_weights(2-model)=True  ✓")
+            print(f"    run_staple_ensemble output shape={out.shape}  ✓")
+    except Exception as exc:
+        result["status"] = FAIL
+        result["issues"] = [str(exc)]
+        print(f"  S13 STAPLE fixes: FAIL — {exc}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Channel order documentation check (no inference — static analysis)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1524,6 +1607,11 @@ def main():
     # ── S12: nnU-Net weight=0.0 when weights absent (Problem E gate) ─────────
     print("[S12] nnU-Net weight/weights guard smoke test...")
     results.append(test_s12_nnunet_weight_zero_without_weights())
+    print()
+
+    # ── S13: STAPLE ensemble fixes (Problem D gate) ───────────────────────────
+    print("[S13] STAPLE ensemble fixes smoke test...")
+    results.append(test_s13_staple_fixes())
     print()
 
     sr_prob = None

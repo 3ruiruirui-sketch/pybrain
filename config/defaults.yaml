@@ -73,7 +73,7 @@ models:
       tc: [0.25, 0.65]
       et: [0.20, 0.60]
   staple_ensemble:
-    enabled: false
+    enabled: true
     subregion_weights:
       # Optional subregion-specific weights (will be blended with STAPLE)
       # Format: {model_name: weight}
