@@ -1,0 +1,108 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pybrain"
+version = "0.1.0"
+description = "Brain tumor MRI segmentation pipeline with uncertainty quantification"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "PY-BRAIN Contributors"}
+]
+keywords = [
+    "brain-tumor-segmentation",
+    "mri",
+    "medical-imaging",
+    "monai",
+    "pytorch",
+    "uncertainty-quantification",
+    "deep-learning",
+    "research-software",
+    "brats",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Field of Study :: Neuroscience :: Medical Imaging",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0.0",
+    "torchvision",
+    "monai>=1.2.0",
+    "einops",
+    "pydicom",
+    "nibabel",
+    "SimpleITK",
+    "pynrrd",
+    "scikit-image",
+    "scipy",
+    "pyradiomics",
+    "scikit-learn",
+    "pandas",
+    "numpy<2.0.0",
+    "reportlab",
+    "matplotlib",
+    "plotly",
+    "rich",
+    "tqdm",
+    "PyYAML",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "pyright>=1.1.0",
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/<user>/pybrain"
+Documentation = "https://github.com/<user>/pybrain#readme"
+Repository = "https://github.com/<user>/pybrain"
+"Bug Tracker" = "https://github.com/<user>/pybrain/issues"
+Citation = "https://github.com/<user>/pybrain/CITATION.cff"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pybrain*", "scripts*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+src = ["pybrain", "scripts"]
+lint.select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+lint.ignore = ["E501", "B028", "UP007"]
+
+[tool.pyright]
+include = ["pybrain", "scripts"]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests that require GPU",
+    "integration: marks tests that require model weights",
+]

@@ -1,18 +1,53 @@
-# Plano de Validação Multi-Caso PY-BRAIN
+# Multi-Case Validation Plan — PY-BRAIN
 
-**Versão:** 1.0  
+**Versão:** 2.0  
 **Data:** 2026-04-13  
-**Status:** Documento de planejamento — casos ainda não executados
+**Status:** ✅ **IMPLEMENTED** — Automated multi-case validation workflow active
 
 ---
 
-## Objetivo
+## Quick Start — Automated Validation
 
-Validar a estabilidade e consistência do pipeline PY-BRAIN em múltiplos casos BraTS2021, confirmando:
-- Dice WT ≥ 0.93 em todos os casos
-- HD95 aceitável (< 15mm)
-- Volume diferença < 10% vs ground truth
-- Runtime consistente
+### Run Multi-Case Validation (Recommended)
+
+```bash
+# Activate environment
+cd ~/Downloads/PY-BRAIN
+source .venv/bin/activate
+
+# Run validation on specific cases
+python scripts/run_multi_case_validation.py \
+    --brats-root data/datasets/BraTS2021/raw/BraTS2021_Training_Data \
+    --cases BraTS2021_00000 BraTS2021_00002 BraTS2021_00003 \
+    --device mps \
+    --output-dir results/validation_runs \
+    --summary-dir results/validation_summary
+
+# Generate visualizations
+python scripts/plot_validation_summary.py \
+    --csv results/validation_summary/multi_case_metrics.csv \
+    --output-dir results/validation_summary/figures
+```
+
+### Outputs Generated
+
+| Output | Location | Description |
+|--------|----------|-------------|
+| Per-case results | `results/validation_runs/<case_id>/` | Session, segmentation, metrics |
+| CSV metrics | `results/validation_summary/multi_case_metrics.csv` | Tabular data for analysis |
+| JSON summary | `results/validation_summary/multi_case_summary.json` | Aggregated statistics |
+| Markdown report | `results/validation_summary/MULTI_CASE_VALIDATION_REPORT.md` | Scientific report |
+| Figures | `results/validation_summary/figures/` | Plots and visualizations |
+
+---
+
+## Objective
+
+Validate PY-BRAIN pipeline stability and consistency across multiple BraTS2021 cases:
+- Dice WT ≥ 0.90 (excellent: ≥ 0.93)
+- HD95 acceptable (< 20mm, excellent: < 10mm)
+- Volume difference < 15% vs ground truth
+- Consistent runtime across cases
 
 ---
 

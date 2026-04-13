@@ -1507,6 +1507,164 @@ def compute_dice_from_probs(prob_a: np.ndarray, prob_b: np.ndarray, threshold: f
 
 
 # =============================================================================
+# Debug Visualization
+# =============================================================================
+
+def generate_debug_visualization(
+    output_dir: Path,
+    seg_full: np.ndarray,
+    mc_uncertainties: Optional[Dict[str, np.ndarray]],
+    volumes: Optional[Dict[str, np.ndarray]] = None,
+) -> None:
+    """
+    Generate structured debug visualization of pipeline outputs.
+    
+    Creates a 2x2 figure showing:
+    - FLAIR reference image
+    - FLAIR + segmentation overlay
+    - MC-Dropout uncertainty map
+    - Mean probability map
+    
+    Only runs if MC-Dropout outputs are available.
+    """
+    logger = get_logger("pybrain")
+    
+    # Check if MC-Dropout data available
+    if not mc_uncertainties or "segresnet_mean_prob" not in mc_uncertainties:
+        logger.debug("Debug visualization skipped: MC-Dropout data not available")
+        return
+    
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+        from skimage import measure
+        
+        # Find FLAIR volume
+        flair = None
+        if volumes and "FLAIR" in volumes:
+            flair = volumes["FLAIR"]
+        elif volumes:
+            # Try to find any volume as reference
+            flair = next(iter(volumes.values()))
+        
+        if flair is None:
+            logger.debug("Debug visualization skipped: No reference volume available")
+            return
+        
+        # Get MC-Dropout data
+        mean_prob = mc_uncertainties["segresnet_mean_prob"]  # Shape: (3, H, W, D)
+        uncertainty = mc_uncertainties.get("segresnet", None)  # Shape: (3, H, W, D)
+        
+        # Find central slice with tumor
+        tumor_mask = seg_full > 0
+        tumor_per_slice = tumor_mask.sum(axis=(0, 1))
+        center_z = int(np.argmax(tumor_per_slice))
+        
+        # Extract slices
+        flair_slice = flair[:, :, center_z]
+        seg_slice = seg_full[:, :, center_z]
+        
+        # Process mean prob (WT channel = index 1)
+        if mean_prob.ndim == 4 and mean_prob.shape[0] == 3:
+            prob_slice = mean_prob[1, :, :, center_z]
+        else:
+            prob_slice = mean_prob[:, :, center_z]
+        
+        # Process uncertainty (mean across channels)
+        if uncertainty is not None and uncertainty.ndim == 4 and uncertainty.shape[0] == 3:
+            unc_slice = uncertainty[:, :, :, center_z].mean(axis=0)
+        elif uncertainty is not None:
+            unc_slice = uncertainty[:, :, center_z]
+        else:
+            unc_slice = np.zeros_like(flair_slice)
+        
+        # Create figure
+        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        fig.suptitle(f'DEBUG VISUAL - Slice Z={center_z}', fontsize=14, fontweight='bold')
+        
+        # (a) FLAIR
+        ax = axes[0, 0]
+        vmax = np.percentile(flair, 99)
+        ax.imshow(flair_slice.T, cmap='gray', origin='lower', vmin=0, vmax=vmax)
+        ax.set_title('(a) FLAIR Reference', fontsize=11, fontweight='bold')
+        ax.axis('off')
+        
+        # (b) FLAIR + Segmentation overlay
+        ax = axes[0, 1]
+        ax.imshow(flair_slice.T, cmap='gray', origin='lower', vmin=0, vmax=vmax)
+        
+        # Create RGB overlay
+        seg_rgb = np.zeros((*seg_slice.T.shape, 4))
+        seg_rgb[seg_slice.T == 2] = [0, 1, 0, 0.4]      # Edema = Green
+        seg_rgb[seg_slice.T == 1] = [0, 0, 1, 0.5]      # Necrotic = Blue
+        seg_rgb[seg_slice.T == 4] = [1, 0, 0, 0.6]      # Enhancing = Red
+        ax.imshow(seg_rgb, origin='lower', interpolation='nearest')
+        
+        ax.set_title('(b) FLAIR + Segmentation\nG=Edema, B=Necrotic, R=Enhancing', 
+                     fontsize=11, fontweight='bold')
+        ax.axis('off')
+        
+        legend_elements = [
+            Patch(facecolor='green', alpha=0.4, label='Edema (2)'),
+            Patch(facecolor='blue', alpha=0.5, label='Necrotic (1)'),
+            Patch(facecolor='red', alpha=0.6, label='Enhancing (4)')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
+        
+        # (c) Uncertainty map
+        ax = axes[1, 0]
+        im = ax.imshow(unc_slice.T, cmap='hot', origin='lower', interpolation='nearest')
+        ax.set_title('(c) MC-Dropout Uncertainty\n(Hot = High Uncertainty)', 
+                     fontsize=11, fontweight='bold')
+        ax.axis('off')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+        # Add tumor contour
+        contours = measure.find_contours(seg_slice.T > 0, 0.5)
+        for contour in contours:
+            ax.plot(contour[:, 1], contour[:, 0], 'cyan', linewidth=1.5, alpha=0.7)
+        
+        # (d) Mean probability
+        ax = axes[1, 1]
+        im = ax.imshow(prob_slice.T, cmap='viridis', origin='lower', 
+                       interpolation='nearest', vmin=0, vmax=1)
+        ax.set_title('(d) Mean Probability (WT)', 
+                     fontsize=11, fontweight='bold')
+        ax.axis('off')
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+        # Add threshold contour
+        prob_contours = measure.find_contours(prob_slice.T, 0.5)
+        for contour in prob_contours:
+            ax.plot(contour[:, 1], contour[:, 0], 'white', 
+                   linewidth=1.5, linestyle='--', alpha=0.8)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        output_path = output_dir / "debug_visualization.png"
+        plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        
+        # Compute statistics
+        unc_in = unc_slice[seg_slice > 0]
+        unc_out = unc_slice[seg_slice == 0]
+        ratio = unc_in.mean() / (unc_out.mean() + 1e-8)
+        
+        prob_in = prob_slice[seg_slice > 0]
+        prob_out = prob_slice[seg_slice == 0]
+        
+        logger.info(f"Debug visualization saved: {output_path}")
+        logger.info(f"  Uncertainty ratio (tumor/brain): {ratio:.1f}x")
+        logger.info(f"  Mean prob in tumor: {prob_in.mean():.3f}, outside: {prob_out.mean():.3f}")
+        
+    except Exception as exc:
+        logger.warning(f"Debug visualization failed: {exc} — continuing pipeline")
+
+
+# =============================================================================
 # Output Saving
 # =============================================================================
 
@@ -1523,6 +1681,7 @@ def save_all_outputs(
     voxel_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     applied_thresholds: Optional[Dict[str, float]] = None,
     mc_uncertainties: Optional[Dict[str, np.ndarray]] = None,
+    volumes: Optional[Dict[str, np.ndarray]] = None,
 ) -> None:
     """Save NIfTI segmentations, probability maps, and JSON reports."""
     logger     = get_logger("pybrain")
@@ -1614,6 +1773,14 @@ def save_all_outputs(
             },
             f,
             indent=2,
+        )
+        
+        # ── Generate debug visualization (if MC-Dropout available) ─────────────
+        generate_debug_visualization(
+            output_dir=output_dir,
+            seg_full=seg_full,
+            mc_uncertainties=mc_uncertainties,
+            volumes=volumes,
         )
 
 
@@ -1966,7 +2133,8 @@ def main() -> None:
             brain_mask, ref_img, config, quality_report,
             model_probs_list, voxel_spacing,
             applied_thresholds=applied_thresholds,
-            mc_uncertainties=mc_uncertainties_full if mc_uncertainties_full else None
+            mc_uncertainties=mc_uncertainties_full if mc_uncertainties_full else None,
+            volumes=volumes
         )
 
         # ── Optional ground-truth validation ──────────────────────────────────

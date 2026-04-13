@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+type: software
+title: "PY-BRAIN"
+abstract: >-
+  Brain tumor MRI segmentation pipeline with epistemic uncertainty
+  quantification, Platt calibration, and multi-model ensemble fusion.
+  Designed for reproducible research in medical imaging.
+authors:
+  - family-names: "PY-BRAIN Contributors"
+    given-names: "PY-BRAIN Team"
+version: "0.1.0"
+doi: ""  # PENDING — assign via Zenodo upon first release
+date-released: "2026-04-13"
+repository-code: "https://github.com/<user>/pybrain"
+url: "https://github.com/<user>/pybrain"
+license: MIT
+keywords:
+  - brain-tumor-segmentation
+  - mri
+  - medical-imaging
+  - monai
+  - pytorch
+  - uncertainty-quantification
+  - deep-learning
+  - research-software
+  - brats
+  - segmentation
+  - swinunetr
+  - segresnet
+commit: "<git-commit-hash>"
+preferred-citation:
+  type: article
+  title: "PY-BRAIN: Reproducible Brain Tumor MRI Segmentation with Uncertainty Quantification"
+  authors:
+    - name: "PY-BRAIN Contributors"
+  year: 2026
+  # doi: ""  # PENDING — assign upon Zenodo submission

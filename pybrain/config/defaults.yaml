@@ -8,7 +8,7 @@ thresholds:
 
 # Statistical Threshold Optimization (BraTS QU-inspired)
 statistical_thresholds:
-  enabled: false                    # Enable uncertainty-based adaptive thresholding
+  enabled: true                    # Enable uncertainty-based adaptive thresholding
   adaptive_uncertainty: true        # Use uncertainty to modulate thresholds
   uncertainty_weight: 0.1          # Weight for uncertainty adjustment (0-1)
   clinical_bounds:                  # Safety bounds to prevent pathological thresholds
@@ -100,7 +100,7 @@ models:
   # Runs stochastic forward passes with dropout enabled for calibrated uncertainty.
   # Provides epistemic uncertainty estimates suitable for FDA/CE-MDR reporting.
   mc_dropout:
-    enabled: true
+    enabled: false
     n_samples: 15  # Number of MC samples (10-20 recommended for balance of speed/accuracy)
     models: ["segresnet"]  # Which models to run MC-Dropout on
 

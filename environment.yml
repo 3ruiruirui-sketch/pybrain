@@ -1,0 +1,57 @@
+# Conda environment file for PY-BRAIN
+# Usage: conda env create -f environment.yml
+#
+# Note: This provides CPU-only dependencies.
+# For GPU support, install PyTorch with CUDA from pytorch.org first,
+# then: conda env create -f environment.yml
+
+name: pybrain
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.9
+  - pip>=23.0
+
+  # Core ML (CPU)
+  - pytorch>=2.0.0
+  - torchvision>=0.15.0
+  - cpuonly  # Force CPU-only to avoid GPU deps on Mac
+
+  # Medical imaging
+  - monai>=1.2.0
+  - nibabel>=5.0.0
+  - simpleitk>=2.2.0
+  - pydicom>=2.3.0
+  - pynrrd>=1.0.0
+
+  # Scientific computing
+  - scipy>=1.10.0
+  - scikit-image>=0.21.0
+  - scikit-learn>=1.2.0
+  - pandas>=2.0.0
+  - numpy<2.0.0
+
+  # Visualization & reporting
+  - matplotlib>=3.7.0
+  - plotly>=5.14.0
+  - reportlab>=4.0.0
+
+  # Utilities
+  - tqdm>=4.65.0
+  - pyyaml>=6.0
+  - pip:
+      - einops>=0.6.0
+      - python-dotenv>=1.0.0
+      - rich>=13.0.0
+      - pyradiomics>=3.0.0
+
+# Test dependencies (run with: pytest tests/)
+  - pytest>=7.0.0
+  - pytest-cov>=4.0.0
+
+# Development dependencies (optional)
+  - ruff>=0.1.0
+  - pyright>=1.1.0
