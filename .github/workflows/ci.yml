@@ -6,13 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel in-progress runs for the same branch/PR
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ─── Lint & Type Check ────────────────────────────────────────────────────
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
@@ -45,7 +43,6 @@ jobs:
         run: pyright pybrain/ --outputjson 2>&1 | tail -5
         continue-on-error: true
 
-  # ─── Smoke Tests ─────────────────────────────────────────────────────────
   smoke:
     name: Import Smoke Test
     runs-on: ubuntu-latest
@@ -63,19 +60,21 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install torch --index-url https://download.pytorch.org/whl/cpu && \
           pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image pandas pyyaml einops
 
-      - name: Smoke test — package imports
-        run: python -c "import torch; import monai; import nibabel; import SimpleITK; import pydicom; import numpy as np; import scipy; import sklearn; print('All imports OK'); print(f'PyTorch: {torch.__version__}'); print(f'MONAI: {monai.__version__}'); print(f'NumPy: {np.__version__}')"
+      - name: Smoke test - package imports
+        run: |
+          python -c "import torch; import monai; import nibabel; import SimpleITK; import pydicom; import numpy as np; import scipy; import sklearn; print('All imports OK'); print('PyTorch:', torch.__version__); print('MONAI:', monai.__version__); print('NumPy:', np.__version__)"
 
-      - name: Smoke test — pybrain module
-        run: python -c "import sys; sys.path.insert(0, '.'); from pybrain.core import metrics, normalization; from pybrain.io import config as io_config; print('pybrain core imports OK')"
+      - name: Smoke test - pybrain module
+        run: |
+          python -c "import sys; sys.path.insert(0, '.'); from pybrain.core import metrics, normalization; print('pybrain core imports OK')"
 
-      - name: Smoke test — scripts module
-        run: python -c "import sys; sys.path.insert(0, '.'); import scripts.utils as utils; print('scripts.utils OK')"
+      - name: Smoke test - scripts module
+        run: |
+          python -c "import sys; sys.path.insert(0, '.'); import scripts.utils; print('scripts.utils OK')"
 
-  # ─── Documentation ────────────────────────────────────────────────────────
   docs:
     name: Documentation Check
     runs-on: ubuntu-latest
@@ -91,19 +90,12 @@ jobs:
             if [ -f "$f" ]; then echo "OK: $f"; else echo "MISSING: $f"; exit 1; fi
           done
 
-      - name: Check docs/ directory structure
+      - name: Check docs directory structure
         run: |
           for f in docs/DATA.md docs/technical/VALIDATION.md docs/technical/MODEL_CARD.md docs/technical/REPRODUCIBILITY.md; do
             if [ -f "$f" ]; then echo "OK: $f"; else echo "MISSING: $f"; exit 1; fi
           done
 
-# ─── Notes ───────────────────────────────────────────────────────────────────
-# Lightweight CI checks only:
-#   • No GPU inference — too slow and Mac MPS not available in CI
-#   • No model weight downloads — would make CI too slow
-#   • No full regression suite — requires model weights and BraTS data
-#
-# To run the full regression suite locally:
-#   python -m pytest tests/regression_baseline.py -v
-#
-# See docs/technical/VALIDATION.md for the complete validation protocol.
+# NOTE: This CI runs lightweight checks only. No GPU inference (too slow for CI).
+# Full regression suite: python -m pytest tests/regression_baseline.py -v
+# See docs/technical/VALIDATION.md for validation protocol.
