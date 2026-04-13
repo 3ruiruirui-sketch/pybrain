@@ -1,0 +1,30 @@
+# Core Deep Learning
+torch>=2.0.0
+torchvision
+monai>=1.2.0
+einops
+
+# Medical Imaging IO & Processing
+pydicom
+nibabel
+SimpleITK
+pynrrd
+scikit-image
+scipy
+
+# Radiomics & Analysis
+pyradiomics
+scikit-learn
+pandas
+numpy<2.0.0
+
+# Reports & Visualization
+reportlab
+matplotlib
+plotly
+rich
+
+# Utilities
+tqdm
+PyYAML
+python-dotenv

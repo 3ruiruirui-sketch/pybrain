@@ -1,0 +1,7 @@
+# pybrain/config/hardware_profiles.yaml
+hardware:
+  device: "mps" # M-series GPU
+  model_device: "cpu" # Default for SwinUNETR on M-series if GPU is slow
+  num_workers: 4
+  sw_overlap: 0.25
+  sw_batch_size: 4

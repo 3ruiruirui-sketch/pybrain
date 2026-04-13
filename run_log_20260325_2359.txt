@@ -1,0 +1,7 @@
+  ℹ️  Loading latest session: SOARES_MARIA_CELESTE_20260325_194144
+🚀 Initializing on device: mps
+
+══════════════════════════════════════════════════════════════════════
+  PART 1 — LOADING DATA
+══════════════════════════════════════════════════════════════════════
+❌ Missing mandatory file: T1 -> /Users/ssoares/Downloads/PY-BRAIN/results/SOARES_MARIA_CELESTE_20260325_194144/nifti/monai_ready/t1.nii.gz

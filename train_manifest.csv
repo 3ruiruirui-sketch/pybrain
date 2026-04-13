@@ -1,0 +1,4 @@
+patient_id,image_path,mask_path,target,split
+UPENN-GBM-0001,./data/UPENN-GBM-0001_t1ce.nii.gz,./data/UPENN-GBM-0001_mask.nii.gz,1,train
+UPENN-GBM-0002,./data/UPENN-GBM-0002_t1ce.nii.gz,./data/UPENN-GBM-0002_mask.nii.gz,0,train
+UPENN-GBM-0003,./data/UPENN-GBM-0003_t1ce.nii.gz,./data/UPENN-GBM-0003_mask.nii.gz,1,val

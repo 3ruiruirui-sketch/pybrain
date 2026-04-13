@@ -1,0 +1,10 @@
+{
+  "model": "DynUNet (nnU-Net)",
+  "fold": 0,
+  "best_val_dice": 0.45503387845804294,
+  "epochs": 30,
+  "lr": 0.0001,
+  "n_train": 1126,
+  "n_val": 125,
+  "output_weights": "pybrain/models/checkpoints_brats_sota"
+}

@@ -2,451 +2,241 @@
   {
     "case": "BraTS2021_00320",
     "segresnet_tc_dice": 0.9276,
-    "ensemble_tc_dice": 0.9276,
+    "tta4_tc_dice": 0.9298,
+    "ensemble_tc_dice": 0.9297,
     "segresnet_wt_dice": 0.8508,
+    "tta4_wt_dice": 0.848,
     "ensemble_wt_dice": 0.8508,
     "segresnet_et_dice": 0.8052,
-    "ensemble_et_dice": 0.8052
+    "tta4_et_dice": 0.8129,
+    "ensemble_et_dice": 0.8095
   },
   {
     "case": "BraTS2021_00077",
     "segresnet_tc_dice": 0.9757,
-    "ensemble_tc_dice": 0.9757,
+    "tta4_tc_dice": 0.9705,
+    "ensemble_tc_dice": 0.9751,
     "segresnet_wt_dice": 0.9575,
-    "ensemble_wt_dice": 0.9575,
+    "tta4_wt_dice": 0.9596,
+    "ensemble_wt_dice": 0.9589,
     "segresnet_et_dice": 0.9286,
-    "ensemble_et_dice": 0.9286
+    "tta4_et_dice": 0.9313,
+    "ensemble_et_dice": 0.9301
   },
   {
     "case": "BraTS2021_00807",
     "segresnet_tc_dice": 0.9227,
-    "ensemble_tc_dice": 0.9227,
+    "tta4_tc_dice": 0.9305,
+    "ensemble_tc_dice": 0.9275,
     "segresnet_wt_dice": 0.9367,
-    "ensemble_wt_dice": 0.9367,
+    "tta4_wt_dice": 0.9402,
+    "ensemble_wt_dice": 0.9389,
     "segresnet_et_dice": 0.8739,
-    "ensemble_et_dice": 0.8739
+    "tta4_et_dice": 0.8779,
+    "ensemble_et_dice": 0.876
   },
   {
     "case": "BraTS2021_00715",
     "segresnet_tc_dice": 0.9569,
-    "ensemble_tc_dice": 0.9569,
+    "tta4_tc_dice": 0.9559,
+    "ensemble_tc_dice": 0.9568,
     "segresnet_wt_dice": 0.8829,
-    "ensemble_wt_dice": 0.8829,
+    "tta4_wt_dice": 0.8694,
+    "ensemble_wt_dice": 0.8808,
     "segresnet_et_dice": 0.9213,
-    "ensemble_et_dice": 0.9213
+    "tta4_et_dice": 0.9205,
+    "ensemble_et_dice": 0.9215
   },
   {
     "case": "BraTS2021_00646",
     "segresnet_tc_dice": 0.9613,
-    "ensemble_tc_dice": 0.9613,
+    "tta4_tc_dice": 0.9608,
+    "ensemble_tc_dice": 0.9615,
     "segresnet_wt_dice": 0.9379,
-    "ensemble_wt_dice": 0.9379,
+    "tta4_wt_dice": 0.9436,
+    "ensemble_wt_dice": 0.9413,
     "segresnet_et_dice": 0.9256,
-    "ensemble_et_dice": 0.9256
+    "tta4_et_dice": 0.9265,
+    "ensemble_et_dice": 0.926
   },
   {
     "case": "BraTS2021_00403",
     "segresnet_tc_dice": 0.9728,
-    "ensemble_tc_dice": 0.9728,
+    "tta4_tc_dice": 0.9795,
+    "ensemble_tc_dice": 0.9764,
     "segresnet_wt_dice": 0.9501,
-    "ensemble_wt_dice": 0.9501,
+    "tta4_wt_dice": 0.949,
+    "ensemble_wt_dice": 0.9503,
     "segresnet_et_dice": 0.9524,
-    "ensemble_et_dice": 0.9524
+    "tta4_et_dice": 0.9586,
+    "ensemble_et_dice": 0.9556
   },
   {
     "case": "BraTS2021_00296",
     "segresnet_tc_dice": 0.9497,
-    "ensemble_tc_dice": 0.9497,
+    "tta4_tc_dice": 0.9516,
+    "ensemble_tc_dice": 0.9512,
     "segresnet_wt_dice": 0.891,
-    "ensemble_wt_dice": 0.891,
+    "tta4_wt_dice": 0.8895,
+    "ensemble_wt_dice": 0.8911,
     "segresnet_et_dice": 0.9186,
-    "ensemble_et_dice": 0.9186
+    "tta4_et_dice": 0.9203,
+    "ensemble_et_dice": 0.9212
   },
   {
     "case": "BraTS2021_01532",
     "segresnet_tc_dice": 0.9093,
-    "ensemble_tc_dice": 0.9093,
+    "tta4_tc_dice": 0.9158,
+    "ensemble_tc_dice": 0.9129,
     "segresnet_wt_dice": 0.9442,
-    "ensemble_wt_dice": 0.9442,
+    "tta4_wt_dice": 0.9469,
+    "ensemble_wt_dice": 0.9459,
     "segresnet_et_dice": 0.709,
-    "ensemble_et_dice": 0.709
+    "tta4_et_dice": 0.7058,
+    "ensemble_et_dice": 0.708
   },
   {
     "case": "BraTS2021_00251",
     "segresnet_tc_dice": 0.9427,
-    "ensemble_tc_dice": 0.9427,
+    "tta4_tc_dice": 0.9386,
+    "ensemble_tc_dice": 0.941,
     "segresnet_wt_dice": 0.9012,
-    "ensemble_wt_dice": 0.9012,
+    "tta4_wt_dice": 0.9023,
+    "ensemble_wt_dice": 0.9019,
     "segresnet_et_dice": 0.8303,
-    "ensemble_et_dice": 0.8303
+    "tta4_et_dice": 0.831,
+    "ensemble_et_dice": 0.8324
   },
   {
     "case": "BraTS2021_01625",
     "segresnet_tc_dice": 0.9659,
-    "ensemble_tc_dice": 0.9659,
+    "tta4_tc_dice": 0.9725,
+    "ensemble_tc_dice": 0.9697,
     "segresnet_wt_dice": 0.9778,
-    "ensemble_wt_dice": 0.9778,
+    "tta4_wt_dice": 0.9801,
+    "ensemble_wt_dice": 0.9793,
     "segresnet_et_dice": 0.9185,
-    "ensemble_et_dice": 0.9185
+    "tta4_et_dice": 0.9209,
+    "ensemble_et_dice": 0.9206
   },
   {
     "case": "BraTS2021_01280",
     "segresnet_tc_dice": 0.976,
-    "ensemble_tc_dice": 0.976,
+    "tta4_tc_dice": 0.9776,
+    "ensemble_tc_dice": 0.977,
     "segresnet_wt_dice": 0.9615,
-    "ensemble_wt_dice": 0.9615,
+    "tta4_wt_dice": 0.9622,
+    "ensemble_wt_dice": 0.9622,
     "segresnet_et_dice": 0.9446,
-    "ensemble_et_dice": 0.9446
+    "tta4_et_dice": 0.9447,
+    "ensemble_et_dice": 0.9453
   },
   {
     "case": "BraTS2021_00099",
     "segresnet_tc_dice": 0.9573,
-    "ensemble_tc_dice": 0.9573,
+    "tta4_tc_dice": 0.9593,
+    "ensemble_tc_dice": 0.959,
     "segresnet_wt_dice": 0.8562,
-    "ensemble_wt_dice": 0.8562,
+    "tta4_wt_dice": 0.8578,
+    "ensemble_wt_dice": 0.8576,
     "segresnet_et_dice": 0.8442,
-    "ensemble_et_dice": 0.8442
+    "tta4_et_dice": 0.8544,
+    "ensemble_et_dice": 0.8487
   },
   {
     "case": "BraTS2021_00095",
     "segresnet_tc_dice": 0.965,
-    "ensemble_tc_dice": 0.965,
+    "tta4_tc_dice": 0.9663,
+    "ensemble_tc_dice": 0.9666,
     "segresnet_wt_dice": 0.9615,
-    "ensemble_wt_dice": 0.9615,
+    "tta4_wt_dice": 0.9652,
+    "ensemble_wt_dice": 0.9636,
     "segresnet_et_dice": 0.899,
-    "ensemble_et_dice": 0.899
+    "tta4_et_dice": 0.9024,
+    "ensemble_et_dice": 0.9015
   },
   {
     "case": "BraTS2021_00271",
     "segresnet_tc_dice": 0.9486,
-    "ensemble_tc_dice": 0.9486,
+    "tta4_tc_dice": 0.947,
+    "ensemble_tc_dice": 0.95,
     "segresnet_wt_dice": 0.961,
-    "ensemble_wt_dice": 0.961,
+    "tta4_wt_dice": 0.9642,
+    "ensemble_wt_dice": 0.9625,
     "segresnet_et_dice": 0.9065,
-    "ensemble_et_dice": 0.9065
+    "tta4_et_dice": 0.9101,
+    "ensemble_et_dice": 0.9083
   },
   {
     "case": "BraTS2021_00628",
     "segresnet_tc_dice": 0.9242,
-    "ensemble_tc_dice": 0.9242,
+    "tta4_tc_dice": 0.9334,
+    "ensemble_tc_dice": 0.9298,
     "segresnet_wt_dice": 0.9356,
-    "ensemble_wt_dice": 0.9356,
+    "tta4_wt_dice": 0.9341,
+    "ensemble_wt_dice": 0.9365,
     "segresnet_et_dice": 0.873,
-    "ensemble_et_dice": 0.873
+    "tta4_et_dice": 0.8779,
+    "ensemble_et_dice": 0.8758
   },
   {
     "case": "BraTS2021_00679",
     "segresnet_tc_dice": 0.8772,
-    "ensemble_tc_dice": 0.8772,
+    "tta4_tc_dice": 0.86,
+    "ensemble_tc_dice": 0.8762,
     "segresnet_wt_dice": 0.9611,
-    "ensemble_wt_dice": 0.9611,
+    "tta4_wt_dice": 0.9631,
+    "ensemble_wt_dice": 0.9629,
     "segresnet_et_dice": 0.746,
-    "ensemble_et_dice": 0.746
+    "tta4_et_dice": 0.7582,
+    "ensemble_et_dice": 0.7531
   },
   {
     "case": "BraTS2021_01450",
     "segresnet_tc_dice": 0.9282,
-    "ensemble_tc_dice": 0.9282,
+    "tta4_tc_dice": 0.9301,
+    "ensemble_tc_dice": 0.929,
     "segresnet_wt_dice": 0.9179,
-    "ensemble_wt_dice": 0.9179,
+    "tta4_wt_dice": 0.9202,
+    "ensemble_wt_dice": 0.9197,
     "segresnet_et_dice": 0.8895,
-    "ensemble_et_dice": 0.8895
+    "tta4_et_dice": 0.8918,
+    "ensemble_et_dice": 0.8905
   },
   {
     "case": "BraTS2021_01648",
     "segresnet_tc_dice": 0.9786,
-    "ensemble_tc_dice": 0.9786,
+    "tta4_tc_dice": 0.9779,
+    "ensemble_tc_dice": 0.9784,
     "segresnet_wt_dice": 0.9648,
-    "ensemble_wt_dice": 0.9648,
+    "tta4_wt_dice": 0.9665,
+    "ensemble_wt_dice": 0.966,
     "segresnet_et_dice": 0.9547,
-    "ensemble_et_dice": 0.9547
+    "tta4_et_dice": 0.9558,
+    "ensemble_et_dice": 0.9553
   },
   {
     "case": "BraTS2021_00084",
     "segresnet_tc_dice": 0.8957,
-    "ensemble_tc_dice": 0.8957,
+    "tta4_tc_dice": 0.9027,
+    "ensemble_tc_dice": 0.8999,
     "segresnet_wt_dice": 0.9161,
-    "ensemble_wt_dice": 0.9161,
+    "tta4_wt_dice": 0.9165,
+    "ensemble_wt_dice": 0.9174,
     "segresnet_et_dice": 0.8301,
-    "ensemble_et_dice": 0.8301
+    "tta4_et_dice": 0.832,
+    "ensemble_et_dice": 0.8315
   },
   {
     "case": "BraTS2021_01565",
     "segresnet_tc_dice": 0.9719,
-    "ensemble_tc_dice": 0.9719,
+    "tta4_tc_dice": 0.9744,
+    "ensemble_tc_dice": 0.9743,
     "segresnet_wt_dice": 0.9652,
-    "ensemble_wt_dice": 0.9652,
+    "tta4_wt_dice": 0.9703,
+    "ensemble_wt_dice": 0.9678,
     "segresnet_et_dice": 0.9154,
-    "ensemble_et_dice": 0.9154
-  },
-  {
-    "case": "BraTS2021_00579",
-    "segresnet_tc_dice": 0.9701,
-    "ensemble_tc_dice": 0.9701,
-    "segresnet_wt_dice": 0.9636,
-    "ensemble_wt_dice": 0.9636,
-    "segresnet_et_dice": 0.9297,
-    "ensemble_et_dice": 0.9297
-  },
-  {
-    "case": "BraTS2021_01275",
-    "segresnet_tc_dice": 0.9292,
-    "ensemble_tc_dice": 0.9292,
-    "segresnet_wt_dice": 0.9309,
-    "ensemble_wt_dice": 0.9309,
-    "segresnet_et_dice": 0.7969,
-    "ensemble_et_dice": 0.7969
-  },
-  {
-    "case": "BraTS2021_00638",
-    "segresnet_tc_dice": 0.7442,
-    "ensemble_tc_dice": 0.7442,
-    "segresnet_wt_dice": 0.4826,
-    "ensemble_wt_dice": 0.4826,
-    "segresnet_et_dice": 0.7427,
-    "ensemble_et_dice": 0.7427
-  },
-  {
-    "case": "BraTS2021_01335",
-    "segresnet_tc_dice": 0.9301,
-    "ensemble_tc_dice": 0.9301,
-    "segresnet_wt_dice": 0.9658,
-    "ensemble_wt_dice": 0.9658,
-    "segresnet_et_dice": 0.9059,
-    "ensemble_et_dice": 0.9059
-  },
-  {
-    "case": "BraTS2021_01622",
-    "segresnet_tc_dice": 0.9492,
-    "ensemble_tc_dice": 0.9492,
-    "segresnet_wt_dice": 0.7815,
-    "ensemble_wt_dice": 0.7815,
-    "segresnet_et_dice": 0.9293,
-    "ensemble_et_dice": 0.9293
-  },
-  {
-    "case": "BraTS2021_00816",
-    "segresnet_tc_dice": 0.9836,
-    "ensemble_tc_dice": 0.9836,
-    "segresnet_wt_dice": 0.9781,
-    "ensemble_wt_dice": 0.9781,
-    "segresnet_et_dice": 0.9416,
-    "ensemble_et_dice": 0.9416
-  },
-  {
-    "case": "BraTS2021_00019",
-    "segresnet_tc_dice": 0.8937,
-    "ensemble_tc_dice": 0.8937,
-    "segresnet_wt_dice": 0.9221,
-    "ensemble_wt_dice": 0.9221,
-    "segresnet_et_dice": 0.8564,
-    "ensemble_et_dice": 0.8564
-  },
-  {
-    "case": "BraTS2021_00464",
-    "segresnet_tc_dice": 0.8809,
-    "ensemble_tc_dice": 0.8809,
-    "segresnet_wt_dice": 0.8118,
-    "ensemble_wt_dice": 0.8118,
-    "segresnet_et_dice": 0.5789,
-    "ensemble_et_dice": 0.5789
-  },
-  {
-    "case": "BraTS2021_01281",
-    "segresnet_tc_dice": 0.9275,
-    "ensemble_tc_dice": 0.9275,
-    "segresnet_wt_dice": 0.9647,
-    "ensemble_wt_dice": 0.9647,
-    "segresnet_et_dice": 0.8552,
-    "ensemble_et_dice": 0.8552
-  },
-  {
-    "case": "BraTS2021_01112",
-    "segresnet_tc_dice": 0.8764,
-    "ensemble_tc_dice": 0.8764,
-    "segresnet_wt_dice": 0.9803,
-    "ensemble_wt_dice": 0.9803,
-    "segresnet_et_dice": 0.7596,
-    "ensemble_et_dice": 0.7596
-  },
-  {
-    "case": "BraTS2021_00451",
-    "segresnet_tc_dice": 0.9651,
-    "ensemble_tc_dice": 0.9651,
-    "segresnet_wt_dice": 0.9817,
-    "ensemble_wt_dice": 0.9817,
-    "segresnet_et_dice": 0.9373,
-    "ensemble_et_dice": 0.9373
-  },
-  {
-    "case": "BraTS2021_00620",
-    "segresnet_tc_dice": 0.9703,
-    "ensemble_tc_dice": 0.9703,
-    "segresnet_wt_dice": 0.9713,
-    "ensemble_wt_dice": 0.9713,
-    "segresnet_et_dice": 0.9486,
-    "ensemble_et_dice": 0.9486
-  },
-  {
-    "case": "BraTS2021_01105",
-    "segresnet_tc_dice": 0.9255,
-    "ensemble_tc_dice": 0.9255,
-    "segresnet_wt_dice": 0.9534,
-    "ensemble_wt_dice": 0.9534,
-    "segresnet_et_dice": 0.8585,
-    "ensemble_et_dice": 0.8585
-  },
-  {
-    "case": "BraTS2021_00269",
-    "segresnet_tc_dice": 0.9598,
-    "ensemble_tc_dice": 0.9598,
-    "segresnet_wt_dice": 0.9667,
-    "ensemble_wt_dice": 0.9667,
-    "segresnet_et_dice": 0.9139,
-    "ensemble_et_dice": 0.9139
-  },
-  {
-    "case": "BraTS2021_01194",
-    "segresnet_tc_dice": 0.9732,
-    "ensemble_tc_dice": 0.9732,
-    "segresnet_wt_dice": 0.9458,
-    "ensemble_wt_dice": 0.9458,
-    "segresnet_et_dice": 0.7131,
-    "ensemble_et_dice": 0.7131
-  },
-  {
-    "case": "BraTS2021_00283",
-    "segresnet_tc_dice": 0.9603,
-    "ensemble_tc_dice": 0.9603,
-    "segresnet_wt_dice": 0.922,
-    "ensemble_wt_dice": 0.922,
-    "segresnet_et_dice": 0.9053,
-    "ensemble_et_dice": 0.9053
-  },
-  {
-    "case": "BraTS2021_01151",
-    "segresnet_tc_dice": 0.8256,
-    "ensemble_tc_dice": 0.8256,
-    "segresnet_wt_dice": 0.8765,
-    "ensemble_wt_dice": 0.8765,
-    "segresnet_et_dice": 0.9091,
-    "ensemble_et_dice": 0.9091
-  },
-  {
-    "case": "BraTS2021_01120",
-    "segresnet_tc_dice": 0.9548,
-    "ensemble_tc_dice": 0.9548,
-    "segresnet_wt_dice": 0.9272,
-    "ensemble_wt_dice": 0.9272,
-    "segresnet_et_dice": 0.9047,
-    "ensemble_et_dice": 0.9047
-  },
-  {
-    "case": "BraTS2021_01652",
-    "segresnet_tc_dice": 0.9769,
-    "ensemble_tc_dice": 0.9769,
-    "segresnet_wt_dice": 0.9516,
-    "ensemble_wt_dice": 0.9516,
-    "segresnet_et_dice": 0.9451,
-    "ensemble_et_dice": 0.9451
-  },
-  {
-    "case": "BraTS2021_00778",
-    "segresnet_tc_dice": 0.9511,
-    "ensemble_tc_dice": 0.9511,
-    "segresnet_wt_dice": 0.8611,
-    "ensemble_wt_dice": 0.8611,
-    "segresnet_et_dice": 0.8903,
-    "ensemble_et_dice": 0.8903
-  },
-  {
-    "case": "BraTS2021_00124",
-    "segresnet_tc_dice": 0.9639,
-    "ensemble_tc_dice": 0.9639,
-    "segresnet_wt_dice": 0.8905,
-    "ensemble_wt_dice": 0.8905,
-    "segresnet_et_dice": 0.4884,
-    "ensemble_et_dice": 0.4884
-  },
-  {
-    "case": "BraTS2021_01356",
-    "segresnet_tc_dice": 0.9501,
-    "ensemble_tc_dice": 0.9501,
-    "segresnet_wt_dice": 0.9348,
-    "ensemble_wt_dice": 0.9348,
-    "segresnet_et_dice": 0.9124,
-    "ensemble_et_dice": 0.9124
-  },
-  {
-    "case": "BraTS2021_01514",
-    "segresnet_tc_dice": 0.7665,
-    "ensemble_tc_dice": 0.7665,
-    "segresnet_wt_dice": 0.8981,
-    "ensemble_wt_dice": 0.8981,
-    "segresnet_et_dice": 0.5055,
-    "ensemble_et_dice": 0.5055
-  },
-  {
-    "case": "BraTS2021_00359",
-    "segresnet_tc_dice": 0.9762,
-    "ensemble_tc_dice": 0.9762,
-    "segresnet_wt_dice": 0.9529,
-    "ensemble_wt_dice": 0.9529,
-    "segresnet_et_dice": 0.9521,
-    "ensemble_et_dice": 0.9521
-  },
-  {
-    "case": "BraTS2021_01191",
-    "segresnet_tc_dice": 0.8791,
-    "ensemble_tc_dice": 0.8791,
-    "segresnet_wt_dice": 0.982,
-    "ensemble_wt_dice": 0.982,
-    "segresnet_et_dice": 0.7513,
-    "ensemble_et_dice": 0.7513
-  },
-  {
-    "case": "BraTS2021_00230",
-    "segresnet_tc_dice": 0.9492,
-    "ensemble_tc_dice": 0.9492,
-    "segresnet_wt_dice": 0.9427,
-    "ensemble_wt_dice": 0.9427,
-    "segresnet_et_dice": 0.8414,
-    "ensemble_et_dice": 0.8414
-  },
-  {
-    "case": "BraTS2021_01546",
-    "segresnet_tc_dice": 0.9588,
-    "ensemble_tc_dice": 0.9588,
-    "segresnet_wt_dice": 0.9623,
-    "ensemble_wt_dice": 0.9623,
-    "segresnet_et_dice": 0.9606,
-    "ensemble_et_dice": 0.9606
-  },
-  {
-    "case": "BraTS2021_01016",
-    "segresnet_tc_dice": 0.9741,
-    "ensemble_tc_dice": 0.9741,
-    "segresnet_wt_dice": 0.9381,
-    "ensemble_wt_dice": 0.9381,
-    "segresnet_et_dice": 0.9307,
-    "ensemble_et_dice": 0.9307
-  },
-  {
-    "case": "BraTS2021_01156",
-    "segresnet_tc_dice": 0.9461,
-    "ensemble_tc_dice": 0.9461,
-    "segresnet_wt_dice": 0.9083,
-    "ensemble_wt_dice": 0.9083,
-    "segresnet_et_dice": 0.7025,
-    "ensemble_et_dice": 0.7025
-  },
-  {
-    "case": "BraTS2021_01598",
-    "segresnet_tc_dice": 0.9726,
-    "ensemble_tc_dice": 0.9726,
-    "segresnet_wt_dice": 0.9619,
-    "ensemble_wt_dice": 0.9619,
-    "segresnet_et_dice": 0.9336,
-    "ensemble_et_dice": 0.9336
+    "tta4_et_dice": 0.9146,
+    "ensemble_et_dice": 0.9152
   }
 ]

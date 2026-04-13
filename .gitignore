@@ -1,0 +1,43 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Data — never commit patient data
+data/raw_dicom/
+data/nifti_converted/
+data/datasets/
+data/brats_bundle/
+results/
+brats_seg_tmp/
+cache/
+
+# Models (large binaries, use git-lfs or download separately)
+models/BrainIAC/
+models/brats_bundle/
+models/calibration_dryrun/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/

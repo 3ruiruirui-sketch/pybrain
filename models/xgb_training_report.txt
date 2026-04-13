@@ -1,0 +1,62 @@
+XGBOOST CLASSIFIER — TRAINING REPORT
+Generated: 2026-03-21 04:06:58
+============================================================
+
+⚠️  IMPORTANT: This model was trained on SYNTHETIC data
+   generated from published literature distributions.
+   It MUST be re-trained on institutional data before
+   clinical deployment.
+
+DATA SOURCES:
+  - Bakas et al. 2018 (BraTS — 335 glioma cases)
+  - Kickingereder et al. 2016 (radiomics grading)
+  - Zhou et al. 2019 (DL features for IDH)
+
+FEATURES: 893 total
+  Radiomics: 125
+  CNN (DenseNet121): 768
+
+CROSS-VALIDATION (5-fold stratified):
+  AUC-ROC:  1.0000 ± 0.0000
+  Accuracy: 1.0000
+  F1 Score: 1.0000
+
+TRAINING AUC: 1.0000
+
+CLASSIFICATION REPORT:
+              precision    recall  f1-score   support
+
+         LGG       1.00      1.00      1.00       150
+         HGG       1.00      1.00      1.00       250
+
+    accuracy                           1.00       400
+   macro avg       1.00      1.00      1.00       400
+weighted avg       1.00      1.00      1.00       400
+
+
+TOP 20 FEATURES:
+   1. volume_necrosis_cc                       0.2626
+   2. volume_enhancing_cc                      0.1690
+   3. ratio_necrosis_to_whole                  0.1635
+   4. ratio_necrosis_to_core                   0.0934
+   5. T1c_std                                  0.0635
+   6. T1c_glcm_heterogeneity                   0.0501
+   7. ADC_p10                                  0.0474
+   8. ADC_cv                                   0.0194
+   9. shape_compactness                        0.0174
+  10. ct_haemorrhage_pct                       0.0154
+  11. shape_sphericity                         0.0130
+  12. shape_surface_mm2                        0.0122
+  13. ADC_min                                  0.0118
+  14. T1c_glcm_homogeneity                     0.0100
+  15. ADC_mean                                 0.0093
+  16. ct_calcification_pct                     0.0087
+  17. FLAIR_entropy                            0.0074
+  18. shape_extent                             0.0072
+  19. T1c_iqr                                  0.0063
+  20. T1c_glcm_asm                             0.0056
+
+DISCLAIMER:
+  This is a RESEARCH TOOL trained on synthetic data.
+  NOT validated for clinical decision-making.
+  All predictions require histopathological confirmation.

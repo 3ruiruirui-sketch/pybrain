@@ -1,0 +1,12 @@
+{
+  "patient_id": "BraTS2021_00000",
+  "name": "BraTS2021_00000",
+  "exam_date": "2021-01-01",
+  "modality": "MRI",
+  "sequences": [
+    "FLAIR",
+    "T1",
+    "T1c",
+    "T2"
+  ]
+}

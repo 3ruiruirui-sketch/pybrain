@@ -1,0 +1,9 @@
+models:
+  nnunet:
+    enabled: true
+    checkpoint_path: "pybrain/models/checkpoints/nnunet_epoch_16/model_final.pth"
+    roi_mode: true
+  segresnet:
+    enabled: true
+  swinunetr:
+    enabled: true

@@ -1,0 +1,11 @@
+{
+  "venvPath": "/Users/ssoares/Downloads/PY-BRAIN",
+  "venv": ".venv",
+  "pythonPath": "/Users/ssoares/Downloads/PY-BRAIN/.venv/bin/python3",
+  "extraPaths": [
+    "/Users/ssoares/Downloads/PY-BRAIN"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false
+}

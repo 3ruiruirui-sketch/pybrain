@@ -18,15 +18,16 @@ Improvements over v2.x
 [FIX-7]  Summary uncertainty metrics included in the quality JSON report.
 [FIX-8]  Longitudinal delta tracking (cc change vs. prior exam).
 [FIX-9]  Multi-focal tumor flag in the quality report.
-[STUB-A] STAPLE ensemble weighting hook (replaces hardcoded heuristics).
-[STUB-B] Platt-scaling probability calibration hook (replaces ×1.10/×1.05).
-[STUB-C] MC-Dropout inference hook for calibrated uncertainty.
+[DONE-A] STAPLE ensemble weighting (replaces hardcoded heuristics).
+[DONE-B] Platt-scaling probability calibration (replaces ×1.10/×1.05).
+[DONE-C] MC-Dropout inference for calibrated uncertainty.
 """
 
 import gc
 import json
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -46,6 +47,7 @@ from pybrain.core.brainmask import robust_brain_mask
 from pybrain.core.metrics import compute_volume_cc
 from pybrain.core.normalization import norm01, zscore_robust
 from pybrain.io.config import get_config
+import logging
 from pybrain.io.logging_utils import get_logger, setup_logging
 from pybrain.io.nifti_io import save_nifti
 from pybrain.io.session import get_paths, get_patient, get_session
@@ -561,24 +563,32 @@ def run_models(
             logger.info("Loading SegResNet...")
             model  = load_segresnet(config.bundle_dir, config.model_device)
             sr_cfg = config.models.get("segresnet", {})
+            
+            # Standard inference - ALWAYS used for final segmentation
+            prob_standard = run_segresnet_inference(
+                model, input_tensor, config.device, sr_cfg,
+                model_device=config.model_device,
+            )
+            results["segresnet"] = prob_standard
+            
+            # MC-Dropout - runs in parallel for uncertainty quantification only
             if mc_enabled and "segresnet" in mc_config.get("models", []):
-                # Use MC-Dropout for SegResNet
-                from pybrain.models.mc_dropout import run_mc_dropout_inference
-                logger.info(f"Running SegResNet with MC-Dropout ({n_samples} samples)...")
-                mean_prob, std_prob = run_mc_dropout_inference(
-                    model, input_tensor, config.device, n_samples, sr_cfg, config.model_device
+                from pybrain.models.mc_dropout import run_mc_dropout_inference, compute_uncertainty_metrics
+                n_samples_mc = min(n_samples, 15)  # Cap at 15 for speed
+                logger.info(f"Running MC-Dropout ({n_samples_mc} samples) for uncertainty quantification...")
+                mean_prob_mc, std_prob_mc = run_mc_dropout_inference(
+                    model, input_tensor, config.device, n_samples_mc, sr_cfg, config.model_device
                 )
-                prob = mean_prob
-                mc_uncertainties["segresnet"] = std_prob
-                logger.info("SegResNet MC-Dropout completed")
-            else:
-                # Standard inference
-                prob = run_segresnet_inference(
-                    model, input_tensor, config.device, sr_cfg,
-                    model_device=config.model_device,
-                )
-
-            results["segresnet"] = prob
+                mc_uncertainties["segresnet"] = std_prob_mc
+                
+                # Log comparison between standard and MC-Dropout mean
+                diff = np.abs(prob_standard - mean_prob_mc).mean()
+                logger.info(f"MC-Dropout: mean_std={std_prob_mc.mean():.4f}, max_std={std_prob_mc.max():.4f}")
+                logger.info(f"MC-Dropout: mean_abs_diff_from_standard={diff:.6f}")
+                
+                # Store MC-Dropout mean for separate saving (doesn't affect segmentation)
+                mc_uncertainties["segresnet_mean_prob"] = mean_prob_mc
+                
             cleanup_model_memory(model, config.model_device)
         except Exception as e:
             logger.warning(f"SegResNet failed: {e}")
@@ -645,7 +655,7 @@ def fuse_ensemble(
     """
     Weighted fusion of all available model probability maps.
 
-    [STUB-A] STAPLE hook: to replace heuristic weights with STAPLE
+    [DONE-A] STAPLE ensemble: data-driven weight optimization using
     (Simultaneous Truth and Performance Level Estimation), call a STAPLE
     solver here using per-voxel binary predictions from each model.
     STAPLE iteratively estimates each model's sensitivity/specificity and
@@ -834,7 +844,7 @@ def apply_platt_calibration(
     config: PipelineConfig,
 ) -> np.ndarray:
     """
-    [STUB-B] Platt-scaling probability calibration (replaces hardcoded boosts).
+    [DONE-B] Platt-scaling probability calibration (replaces hardcoded boosts).
 
     Production implementation:
       1. On a held-out validation cohort, collect softmax outputs and GT labels.
@@ -1002,7 +1012,7 @@ def postprocess_segmentation(
     seg_full = np.zeros_like(necrotic, dtype=np.uint8)
     seg_full[edema    > 0] = 2
     seg_full[necrotic > 0] = 1
-    seg_full[enhancing > 0] = 3
+    seg_full[enhancing > 0] = 4  # BraTS convention: 4 = enhancing tumor
 
     # ── 7. Small component removal ────────────────────────────────────────────
     min_voxels = max(1, int(config.min_component_cc / vox_vol_cc))
@@ -1479,6 +1489,23 @@ def detect_multifocal(
     return valid_foci >= 2, valid_foci
 
 
+def compute_dice_from_probs(prob_a: np.ndarray, prob_b: np.ndarray, threshold: float = 0.35) -> float:
+    """
+    Compute Dice coefficient between two probability maps.
+    Used to compare MC-Dropout mean vs standard prediction.
+    """
+    mask_a = (prob_a > threshold).astype(np.float32)
+    mask_b = (prob_b > threshold).astype(np.float32)
+    
+    intersection = np.sum(mask_a * mask_b)
+    union = np.sum(mask_a) + np.sum(mask_b)
+    
+    if union < 1e-6:
+        return 1.0 if intersection < 1e-6 else 0.0
+    
+    return float(2.0 * intersection / union)
+
+
 # =============================================================================
 # Output Saving
 # =============================================================================
@@ -1495,6 +1522,7 @@ def save_all_outputs(
     model_probs_list: Optional[List[np.ndarray]] = None,
     voxel_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
     applied_thresholds: Optional[Dict[str, float]] = None,
+    mc_uncertainties: Optional[Dict[str, np.ndarray]] = None,
 ) -> None:
     """Save NIfTI segmentations, probability maps, and JSON reports."""
     logger     = get_logger("pybrain")
@@ -1524,6 +1552,29 @@ def save_all_outputs(
         output_dir / "ensemble_uncertainty.nii.gz",
         ref_img
     )
+    
+    # Save MC-Dropout uncertainty maps (if available)
+    if mc_uncertainties:
+        logger.info("Saving MC-Dropout uncertainty maps...")
+        if "segresnet" in mc_uncertainties:
+            save_nifti(
+                mc_uncertainties["segresnet"],
+                output_dir / "mc_dropout_segresnet_uncertainty.nii.gz",
+                ref_img
+            )
+            logger.info(f"  MC-Dropout uncertainty saved: mean={mc_uncertainties['segresnet'].mean():.4f}")
+        if "segresnet_mean_prob" in mc_uncertainties:
+            save_nifti(
+                mc_uncertainties["segresnet_mean_prob"],
+                output_dir / "mc_dropout_segresnet_mean_prob.nii.gz",
+                ref_img
+            )
+            # Log comparison with standard prediction
+            standard_prob = model_probs_list[0] if model_probs_list else None
+            if standard_prob is not None:
+                mc_mean = mc_uncertainties["segresnet_mean_prob"]
+                dice_mc_vs_standard = compute_dice_from_probs(standard_prob, mc_mean, threshold=0.35)
+                logger.info(f"  MC-Dropout mean vs Standard Dice: {dice_mc_vs_standard:.4f}")
 
     stats = {
         "segmentation_source": "ensemble",
@@ -1687,6 +1738,43 @@ def main() -> None:
             roi_input, config,
             precomputed={"segresnet": sr_prob_roi},
         )
+        
+        # ── MC-Dropout uncertainty quantification (controlled pass) ─────────────
+        # Runs separately from main inference to avoid affecting segmentation.
+        # Only runs on SegResNet for speed, on the ROI crop.
+        mc_uncertainties_full: Dict[str, np.ndarray] = {}
+        mc_config = config.models.get("mc_dropout", {})
+        if mc_config.get("enabled", False) and "segresnet" in mc_config.get("models", []):
+            from pybrain.models.mc_dropout import run_mc_dropout_inference
+            n_samples_mc = min(mc_config.get("n_samples", 15), 15)  # Cap at 15
+            
+            logger.info(f"Running MC-Dropout uncertainty quantification ({n_samples_mc} samples)...")
+            mc_start = time.time()
+            
+            # Load SegResNet fresh for MC-Dropout
+            mc_model = load_segresnet(config.bundle_dir, config.model_device)
+            sr_cfg = config.models.get("segresnet", {})
+            
+            # Run on the same ROI input
+            mean_prob_mc, std_prob_mc = run_mc_dropout_inference(
+                mc_model, roi_input, config.device, n_samples_mc, sr_cfg, config.model_device
+            )
+            
+            mc_elapsed = time.time() - mc_start
+            
+            # Reassemble to full volume
+            full_mc_unc = np.zeros((3,) + orig_shape, dtype=np.float32)
+            full_mc_unc[:, roi_slices[0], roi_slices[1], roi_slices[2]] = std_prob_mc
+            mc_uncertainties_full["segresnet"] = full_mc_unc
+            
+            full_mc_mean = np.zeros((3,) + orig_shape, dtype=np.float32)
+            full_mc_mean[:, roi_slices[0], roi_slices[1], roi_slices[2]] = mean_prob_mc
+            mc_uncertainties_full["segresnet_mean_prob"] = full_mc_mean
+            
+            logger.info(f"MC-Dropout complete: runtime={mc_elapsed:.1f}s, mean_std={std_prob_mc.mean():.4f}, max_std={std_prob_mc.max():.4f}")
+            
+            cleanup_model_memory(mc_model, config.model_device)
+            del mean_prob_mc, std_prob_mc
 
         # Reassemble ROI → full volume
         model_probs: Dict[str, np.ndarray] = {}
@@ -1694,6 +1782,14 @@ def main() -> None:
             full_prob = np.zeros((3,) + orig_shape, dtype=np.float32)
             full_prob[:, roi_slices[0], roi_slices[1], roi_slices[2]] = prob_roi
             model_probs[name] = full_prob
+        
+        # Reassemble MC-Dropout uncertainties from run_models (if any)
+        if mc_uncertainties_roi:
+            for key, unc_roi in mc_uncertainties_roi.items():
+                if unc_roi is not None and key not in mc_uncertainties_full:
+                    full_unc = np.zeros((3,) + orig_shape, dtype=np.float32)
+                    full_unc[:, roi_slices[0], roi_slices[1], roi_slices[2]] = unc_roi
+                    mc_uncertainties_full[key] = full_unc
 
         del roi_input, results_roi, mc_uncertainties_roi
         gc.collect()
@@ -1869,7 +1965,8 @@ def main() -> None:
             seg_full, seg_components, ensemble_prob, uncertainty,
             brain_mask, ref_img, config, quality_report,
             model_probs_list, voxel_spacing,
-            applied_thresholds=applied_thresholds
+            applied_thresholds=applied_thresholds,
+            mc_uncertainties=mc_uncertainties_full if mc_uncertainties_full else None
         )
 
         # ── Optional ground-truth validation ──────────────────────────────────

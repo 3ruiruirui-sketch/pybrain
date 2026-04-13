@@ -1,0 +1,27 @@
+{
+    "classification": {
+        "idh": {
+            "probability": 0.8724735379219055,
+            "logit": 1.9230080842971802,
+            "input_t1ce": "/Users/ssoares/Downloads/PY-BRAIN/data/UPENN-GBM-0001_t1ce.nii.gz",
+            "input_flair": null,
+            "prediction": "Mutant"
+        },
+        "grade": {
+            "probability": null,
+            "category": "Not computed by BrainIAC IDH model"
+        },
+        "idh_mutation": {
+            "most_likely": "Mutant",
+            "confidence": "87.2%",
+            "interpretation": "IDH-mutant suggests better prognosis."
+        },
+        "high_grade": {
+            "probability": null,
+            "prediction": "Not available from IDH-only model"
+        }
+    },
+    "idh_probability": 0.8724735379219055,
+    "idh_logit": 1.9230080842971802,
+    "grade_probability": null
+}
