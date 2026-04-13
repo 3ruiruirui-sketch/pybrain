@@ -862,12 +862,12 @@ def apply_platt_calibration(
                 A = coeffs.get(subregion, {}).get("A")
                 B = coeffs.get(subregion, {}).get("B")
                 if A is not None and B is not None:
-                    logit = np.log(
-                        ensemble_prob[ch_idx] / (1.0 - ensemble_prob[ch_idx] + 1e-8) + 1e-8
-                    )
-                    ensemble_prob[ch_idx] = np.clip(
-                        1.0 / (1.0 + np.exp(-(A * logit + B))), 0.0, 1.0
-                    )
+                    # Clip probabilities to avoid log(0) and extreme logits
+                    p_clip = np.clip(ensemble_prob[ch_idx], 1e-7, 1.0 - 1e-7)
+                    logit = np.log(p_clip / (1.0 - p_clip))
+                    # Clip exponent to prevent overflow (exp(700) ≈ inf)
+                    exponent = np.clip(-(A * logit + B), -500, 500)
+                    ensemble_prob[ch_idx] = 1.0 / (1.0 + np.exp(exponent))
             logger.info("Platt scaling applied from saved coefficients.")
             return ensemble_prob
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
