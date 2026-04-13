@@ -61,7 +61,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu && \
-          pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image pandas pyyaml einops
+          pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image scikit-learn pandas pyyaml einops
 
       - name: Smoke test - package imports
         run: |
