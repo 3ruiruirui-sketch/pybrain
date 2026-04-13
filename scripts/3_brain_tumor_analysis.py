@@ -847,9 +847,12 @@ def apply_platt_calibration(
     identity (no adjustment), which is safer than unvalidated empirical boosts.
     """
     logger   = get_logger("pybrain")
-    cal_path = config.output_dir.parent / config.models.get(
-        "platt_calibration", {}
-    ).get("coefficients_file", "platt_coefficients.json")
+    # Resolve calibration file from project root (bundle_dir is in models/brats_bundle/)
+    project_root = config.bundle_dir.parent.parent  # models/brats_bundle/ -> models/ -> project root
+    rel_path = config.models.get("platt_calibration", {}).get(
+        "coefficients_file", "models/calibration/platt_coefficients.json"
+    )
+    cal_path = project_root / rel_path
 
     if cal_path.exists():
         try:
