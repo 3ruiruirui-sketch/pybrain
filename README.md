@@ -92,7 +92,7 @@ pybrain/
 
 **Using pip:**
 ```bash
-git clone https://github.com/ruisoares1/pybrain.git
+git clone https://github.com/3ruiruirui-sketch/pybrain.git
 cd pybrain
 python3 -m venv .venv
 source .venv/bin/activate
@@ -101,7 +101,7 @@ pip install -r requirements.txt
 
 **Using conda:**
 ```bash
-git clone https://github.com/ruisoares1/pybrain.git
+git clone https://github.com/3ruiruirui-sketch/pybrain.git
 cd pybrain
 conda env create -f environment.yml
 conda activate pybrain
@@ -276,7 +276,7 @@ If you use PY-BRAIN in your research, please cite:
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
-  url = {https://github.com/ruisoares1/pybrain}
+  url = {https://github.com/3ruiruirui-sketch/pybrain}
 }
 ```
 
@@ -315,4 +315,4 @@ Please read our [Code of Conduct](./CODE_OF_CONDUCT.md) and
 - [Validation Report](./docs/technical/VALIDATION.md)
 - [Reproducibility Guide](./docs/technical/REPRODUCIBILITY.md)
 - [Data Guide](./docs/DATA.md)
-- [GitHub Issues](https://github.com/ruisoares1/pybrain/issues)
+- [GitHub Issues](https://github.com/3ruiruirui-sketch/pybrain/issues)

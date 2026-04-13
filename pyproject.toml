@@ -73,11 +73,11 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ruisoares1/pybrain"
-Documentation = "https://github.com/ruisoares1/pybrain#readme"
-Repository = "https://github.com/ruisoares1/pybrain"
-"Bug Tracker" = "https://github.com/ruisoares1/pybrain/issues"
-Citation = "https://github.com/ruisoares1/pybrain/CITATION.cff"
+Homepage = "https://github.com/3ruiruirui-sketch/pybrain"
+Documentation = "https://github.com/3ruiruirui-sketch/pybrain#readme"
+Repository = "https://github.com/3ruiruirui-sketch/pybrain"
+"Bug Tracker" = "https://github.com/3ruiruirui-sketch/pybrain/issues"
+Citation = "https://github.com/3ruiruirui-sketch/pybrain/CITATION.cff"
 
 [tool.setuptools.packages.find]
 where = ["."]

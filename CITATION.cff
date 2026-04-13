@@ -12,8 +12,8 @@ authors:
 version: "0.1.0"
 doi: ""  # PENDING — assign via Zenodo upon first release
 date-released: "2026-04-13"
-repository-code: "https://github.com/ruisoares1/pybrain"
-url: "https://github.com/ruisoares1/pybrain"
+repository-code: "https://github.com/3ruiruirui-sketch/pybrain"
+url: "https://github.com/3ruiruirui-sketch/pybrain"
 license: MIT
 keywords:
   - brain-tumor-segmentation
