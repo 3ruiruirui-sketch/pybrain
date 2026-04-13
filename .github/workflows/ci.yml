@@ -28,19 +28,21 @@ jobs:
           python-version: "3.9"
           cache: "pip"
 
-      - name: Install dependencies
-        run: |
-          pip install ruff pyright torch --index-url https://download.pytorch.org/whl/cpu
-          pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image pandas pyyaml
+      - name: Install lint tools
+        run: pip install ruff pyright
+
+      - name: Install core deps (CPU)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install medical imaging deps
+        run: pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image pandas pyyaml
 
       - name: Run ruff
-        run: |
-          ruff check pybrain/ scripts/ --output-format=github
+        run: ruff check pybrain/ scripts/ --output-format=github
         continue-on-error: true
 
       - name: Run pyright
-        run: |
-          pyright pybrain/ --outputjson 2>&1 | tail -5
+        run: pyright pybrain/ --outputjson 2>&1 | tail -5
         continue-on-error: true
 
   # ─── Smoke Tests ─────────────────────────────────────────────────────────
@@ -61,45 +63,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image pandas pyyaml einops
 
       - name: Smoke test — package imports
-        run: |
-          python -c "
-            import torch
-            import monai
-            import nibabel
-            import SimpleITK
-            import pydicom
-            import numpy as np
-            import scipy
-            import sklearn
-            print('All imports OK')
-            print(f'PyTorch: {torch.__version__}')
-            print(f'MONAI: {monai.__version__}')
-            print(f'NumPy: {np.__version__}')
-          "
+        run: python -c "import torch; import monai; import nibabel; import SimpleITK; import pydicom; import numpy as np; import scipy; import sklearn; print('All imports OK'); print(f'PyTorch: {torch.__version__}'); print(f'MONAI: {monai.__version__}'); print(f'NumPy: {np.__version__}')"
 
       - name: Smoke test — pybrain module
-        run: |
-          python -c "
-            import sys
-            sys.path.insert(0, '.')
-            # Test that pybrain modules can be imported (no weights needed)
-            from pybrain.core import metrics, normalization
-            from pybrain.io import config as io_config
-            print('pybrain core imports OK')
-          "
+        run: python -c "import sys; sys.path.insert(0, '.'); from pybrain.core import metrics, normalization; from pybrain.io import config as io_config; print('pybrain core imports OK')"
 
       - name: Smoke test — scripts module
-        run: |
-          python -c "
-            import sys
-            sys.path.insert(0, '.')
-            # Test basic utilities load without models
-            import scripts.utils as utils
-            print('scripts.utils OK')
-          "
+        run: python -c "import sys; sys.path.insert(0, '.'); import scripts.utils as utils; print('scripts.utils OK')"
 
   # ─── Documentation ────────────────────────────────────────────────────────
   docs:
@@ -114,27 +88,17 @@ jobs:
       - name: Check required docs exist
         run: |
           for f in README.md LICENSE CITATION.cff CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md; do
-            if [ -f "$f" ]; then
-              echo "✓ $f"
-            else
-              echo "✗ MISSING: $f"
-              exit 1
-            fi
+            if [ -f "$f" ]; then echo "OK: $f"; else echo "MISSING: $f"; exit 1; fi
           done
 
       - name: Check docs/ directory structure
         run: |
           for f in docs/DATA.md docs/technical/VALIDATION.md docs/technical/MODEL_CARD.md docs/technical/REPRODUCIBILITY.md; do
-            if [ -f "$f" ]; then
-              echo "✓ $f"
-            else
-              echo "✗ MISSING: $f"
-              exit 1
-            fi
+            if [ -f "$f" ]; then echo "OK: $f"; else echo "MISSING: $f"; exit 1; fi
           done
 
 # ─── Notes ───────────────────────────────────────────────────────────────────
-# This CI runs lightweight checks only:
+# Lightweight CI checks only:
 #   • No GPU inference — too slow and Mac MPS not available in CI
 #   • No model weight downloads — would make CI too slow
 #   • No full regression suite — requires model weights and BraTS data
