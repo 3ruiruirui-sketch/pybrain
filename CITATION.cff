@@ -12,8 +12,8 @@ authors:
 version: "0.1.0"
 doi: ""  # PENDING — assign via Zenodo upon first release
 date-released: "2026-04-13"
-repository-code: "https://github.com/<user>/pybrain"
-url: "https://github.com/<user>/pybrain"
+repository-code: "https://github.com/ruisoares1/pybrain"
+url: "https://github.com/ruisoares1/pybrain"
 license: MIT
 keywords:
   - brain-tumor-segmentation
@@ -28,7 +28,7 @@ keywords:
   - segmentation
   - swinunetr
   - segresnet
-commit: "<git-commit-hash>"
+commit: "6bf873a658853393131181c318be20f392d7159c"
 preferred-citation:
   type: article
   title: "PY-BRAIN: Reproducible Brain Tumor MRI Segmentation with Uncertainty Quantification"

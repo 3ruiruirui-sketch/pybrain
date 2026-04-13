@@ -37,7 +37,7 @@ You can contribute to PY-BRAIN in several ways:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<user>/pybrain.git
+git clone https://github.com/ruisoares1/pybrain.git
 cd pybrain
 
 # 2. Create a virtual environment
