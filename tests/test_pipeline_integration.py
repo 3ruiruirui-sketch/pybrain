@@ -177,7 +177,8 @@ class TestSegmentationValidationPipeline:
         mask = np.ones((100, 100, 100), dtype=np.float32)
         vox_vol = 0.001  # 1mm^3 = 0.001 cc
         vol = compute_volume_cc(mask, vox_vol)
-        assert vol == pytest.approx(1000.0 * 0.001)
+        # 100x100x100 = 1,000,000 voxels * 0.001 cc/voxel = 1000.0 cc
+        assert vol == pytest.approx(1000.0)
 
 
 class TestEndToEndMockPipeline:
