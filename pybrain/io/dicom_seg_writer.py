@@ -12,10 +12,10 @@ from typing import Any, Dict, List
 
 import numpy as np
 import pydicom
-from pydicom.dataset import Dataset, FileDataset
-from pydicom.uid import generate_uid
 import highdicom as hd
-from highdicom.seg import SegmentationDataset
+from highdicom.seg import Segmentation, SegmentDescription
+from highdicom.seg import SegmentAlgorithmTypeValues, SegmentationTypeValues
+from highdicom.sr.coding import CodedConcept
 
 from pybrain.io.logging_utils import get_logger
 
@@ -111,71 +111,88 @@ def write_dicom_seg(
     
     logger.info(f"Found {len(source_files)} DICOM files in source directory")
     
-    # Read first DICOM to get basic metadata
-    first_ds = pydicom.dcmread(str(source_files[0]))
+    # Read source images as pydicom Datasets
+    source_images = [pydicom.dcmread(str(p)) for p in source_files]
     
-    # Create segmentation segments using highdicom's CodeSequence
-    from highdicom.sr import CodeSequence
-    
-    segments = []
-    for seg_def in segment_definitions:
-        # Create binary mask for this segment
-        seg_mask = (segmentation == seg_def.label_value).astype(np.uint8)
+    # Build SegmentDescription objects using real highdicom API
+    seg_descriptions = []
+    for i, seg_def in enumerate(segment_definitions):
+        # Create CodedConcept for property category
+        if seg_def.segmented_property_category == "Mass":
+            category_code = CodedConcept(
+                value="49755003", scheme_designator="SCT", meaning="Morphologically Abnormal Structure"
+            )
+        elif seg_def.segmented_property_type == "Neoplasm, Primary":
+            category_code = CodedConcept(
+                value="86049000", scheme_designator="SCT", meaning="Neoplasm, Primary"
+            )
+        else:
+            category_code = CodedConcept(
+                value="49755003", scheme_designator="SCT", meaning="Morphologically Abnormal Structure"
+            )
         
-        # Create segment attributes as a dict
-        segment_attributes = {
-            "SegmentNumber": len(segments) + 1,
-            "SegmentLabel": seg_def.name,
-            "SegmentDescription": f"{seg_def.name} segmentation",
-            "SegmentAlgorithmType": seg_def.algorithm_type,
-            "SegmentAlgorithmName": seg_def.algorithm_name,
-            "SegmentedPropertyCategoryCodeSequence": CodeSequence(
-                value=seg_def.segmented_property_category,
-                scheme_designator="SCT",
-                meaning=seg_def.segmented_property_category,
-            ),
-            "SegmentedPropertyTypeCodeSequence": CodeSequence(
-                value=seg_def.segmented_property_type,
-                scheme_designator="SCT",
-                meaning=seg_def.segmented_property_type,
-            ),
-        }
+        # Create CodedConcept for property type
+        if seg_def.segmented_property_type == "Mass":
+            type_code = CodedConcept(
+                value="86049000", scheme_designator="SCT", meaning="Neoplasm, Primary"
+            )
+        elif seg_def.segmented_property_type == "Tumor Core":
+            type_code = CodedConcept(
+                value="43134007", scheme_designator="SCT", meaning="Tumor Core"
+            )
+        else:
+            type_code = CodedConcept(
+                value="86049000", scheme_designator="SCT", meaning="Neoplasm, Primary"
+            )
         
-        # Add tracking IDs if provided
-        if seg_def.tracking_id:
-            segment_attributes["TrackingID"] = seg_def.tracking_id
-            segment_attributes["TrackingUID"] = seg_def.tracking_uid or str(uuid.uuid4())
+        # Create SegmentDescription
+        seg_desc = SegmentDescription(
+            segment_number=i + 1,
+            segment_label=seg_def.name,
+            segmented_property_category=category_code,
+            segmented_property_type=type_code,
+            algorithm_type=SegmentAlgorithmTypeValues.AUTOMATIC,
+        )
         
         # Add recommended display color if provided
         if seg_def.color:
-            segment_attributes["RecommendedDisplayCIELabValue"] = seg_def.color
+            seg_desc.recommended_display_cielab_value = seg_def.color
         
-        segments.append(segment_attributes)
+        seg_descriptions.append(seg_desc)
     
-    # Create DICOM-SEG dataset using highdicom
-    seg_ds = SegmentationDataset(
-        source_images=source_files,
-        segmentation=segmentation,
-        segment_attributes=segments,
-        series_description=series_description,
+    # Ensure segmentation is in correct shape (slices, rows, columns)
+    # highdicom expects (slices, rows, columns)
+    if segmentation.ndim == 3:
+        # If segmentation is (rows, cols, slices), transpose to (slices, rows, cols)
+        if segmentation.shape[2] < segmentation.shape[0]:
+            segmentation = np.transpose(segmentation, (2, 0, 1))
+    
+    # Add research-only disclaimer if requested
+    if include_disclaimer and "(Research Only)" not in series_description:
+        series_description += " (Research Only)"
+    
+    # Create the Segmentation using real highdicom API
+    seg = Segmentation(
+        source_images=source_images,
+        pixel_array=segmentation,
+        segmentation_type=SegmentationTypeValues.BINARY,
+        segment_descriptions=seg_descriptions,
+        series_instance_uid=hd.UID(),
         series_number=1,
+        sop_instance_uid=hd.UID(),
         instance_number=1,
         manufacturer=manufacturer,
         manufacturer_model_name=manufacturer_model_name,
         software_versions=software_versions,
+        device_serial_number="PYBRAIN-DEV",
     )
-    
-    # Add research-only disclaimer if requested
-    if include_disclaimer:
-        if not "(Research Only)" in seg_ds.SeriesDescription:
-            seg_ds.SeriesDescription += " (Research Only)"
     
     # Save DICOM-SEG file
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    seg_ds.save_as(str(output_path))
+    seg.save_as(str(output_path))
     
     logger.info(f"DICOM-SEG written successfully to {output_path}")
-    logger.info(f"  Series Description: {seg_ds.SeriesDescription}")
-    logger.info(f"  Number of segments: {len(segments)}")
+    logger.info(f"  Series Description: {series_description}")
+    logger.info(f"  Number of segments: {len(seg_descriptions)}")
     
     return output_path
