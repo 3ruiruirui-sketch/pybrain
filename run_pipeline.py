@@ -159,9 +159,28 @@ def _guess_type(name):
     ):
         return "IGNORE"
     # T1c BEFORE T1 (civ = contrast IV)
-    # Use word boundary matching to prevent 't1c' from matching 't1' in 'posterior_fossa_t1'
-    t1c_patterns = ["civ", "_civ", "contrast", "gad", "postcontrast", "post_gad", "post_contrast", "t1c", "t1+", "+c", "t1_ce", "t1ce", "t1_gd"]
-    if any(re.search(rf"\b{re.escape(x)}\b", n) for x in t1c_patterns):
+    # Use regex patterns with negative lookahead to match 'post' but not 'posterior'
+    t1c_patterns = [
+        r"\bciv\b",
+        r"_civ\b",
+        r"\bcontrast\b",
+        r"\bgad\b",
+        r"\bpost(?!erior)",  # post but not posterior
+        r"postcontrast",
+        r"post_gad",
+        r"post_contrast",
+        r"\bt1c\b",
+        r"t1c_",  # t1c_mprage, t1c_3d, etc.
+        r"\bt1ce\b",
+        r"t1ce_",  # t1ce_mprage, etc.
+        r"t1\+",
+        r"\+c\b",
+        r"\bt1_ce\b",
+        r"t1_ce_",
+        r"\bt1_gd\b",
+        r"t1_gd_",
+    ]
+    if any(re.search(p, n) for p in t1c_patterns):
         return "T1c"
     # T1 3D
     t1_patterns = [
