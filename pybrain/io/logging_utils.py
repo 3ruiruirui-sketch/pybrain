@@ -8,21 +8,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+
 def setup_logging(output_dir: Optional[Path] = None, log_level: int = logging.INFO):
     """
     Configures logging to console and optionally to a file in the session directory.
     """
     logger = logging.getLogger("pybrain")
     logger.setLevel(log_level)
-    
+
     # Avoid duplicate handlers
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
-        '[%(levelname)s] %(asctime)s - %(name)s - %(message)s',
-        datefmt='%H:%M:%S'
-    )
+    formatter = logging.Formatter("[%(levelname)s] %(asctime)s - %(name)s - %(message)s", datefmt="%H:%M:%S")
 
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -37,6 +35,7 @@ def setup_logging(output_dir: Optional[Path] = None, log_level: int = logging.IN
         logger.addHandler(file_handler)
 
     return logger
+
 
 def get_logger(name: str):
     """Get a child logger."""

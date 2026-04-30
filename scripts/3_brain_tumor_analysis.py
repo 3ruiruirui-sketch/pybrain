@@ -47,7 +47,6 @@ from pybrain.core.brainmask import robust_brain_mask
 from pybrain.core.metrics import compute_volume_cc
 from pybrain.core.normalization import norm01, zscore_robust
 from pybrain.io.config import get_config
-import logging
 from pybrain.io.logging_utils import get_logger, setup_logging
 from pybrain.io.nifti_io import save_nifti
 from pybrain.io.session import get_paths, get_patient, get_session
@@ -56,6 +55,7 @@ from pybrain.models.segresnet import load_segresnet, run_segresnet_inference, ru
 from pybrain.models.swinunetr import run_swinunetr_inference
 
 import warnings
+
 # Suppress only known harmless warnings — keep convergence/overflow warnings visible
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -65,6 +65,7 @@ warnings.filterwarnings("ignore", message=".*torch.meshgrid.*")
 # =============================================================================
 # Registration Quality Assurance
 # =============================================================================
+
 
 def _compute_nmi(vol_a: np.ndarray, vol_b: np.ndarray, bins: int = 32) -> float:
     """
@@ -82,17 +83,17 @@ def _compute_nmi(vol_a: np.ndarray, vol_b: np.ndarray, bins: int = 32) -> float:
     a = vol_a.astype(np.float64).ravel()
     b = vol_b.astype(np.float64).ravel()
 
-    a = np.clip((a - a.min()) / (a.ptp() + 1e-12), 0.01, 0.99)
-    b = np.clip((b - b.min()) / (b.ptp() + 1e-12), 0.01, 0.99)
+    a = np.clip((a - a.min()) / ((a.max() - a.min()) + 1e-12), 0.01, 0.99)
+    b = np.clip((b - b.min()) / ((b.max() - b.min()) + 1e-12), 0.01, 0.99)
 
     h, _, _ = np.histogram2d(a, b, bins=bins)
     p = h / (h.sum() + 1e-12)
     px = p.sum(axis=1)
     py = p.sum(axis=0)
 
-    Hx  = -np.sum(px[px > 0] * np.log(px[px > 0]))
-    Hy  = -np.sum(py[py > 0] * np.log(py[py > 0]))
-    Hxy = -np.sum(p[p   > 0] * np.log(p[p   > 0]))
+    Hx = -np.sum(px[px > 0] * np.log(px[px > 0]))
+    Hy = -np.sum(py[py > 0] * np.log(py[py > 0]))
+    Hxy = -np.sum(p[p > 0] * np.log(p[p > 0]))
 
     # Studholme NMI: (H_x + H_y) / H_xy — matches Gate A (registration_validation.py)
     return float((Hx + Hy) / (Hxy + 1e-12))
@@ -122,10 +123,7 @@ def validate_all_registrations(
             logger.warning(f"NMI check skipped for {seq_a}↔{seq_b}: sequence not loaded.")
             continue
         if vol_a.shape != vol_b.shape:
-            logger.warning(
-                f"NMI check skipped for {seq_a}↔{seq_b}: "
-                f"shape mismatch {vol_a.shape} vs {vol_b.shape}."
-            )
+            logger.warning(f"NMI check skipped for {seq_a}↔{seq_b}: shape mismatch {vol_a.shape} vs {vol_b.shape}.")
             continue
 
         nmi = _compute_nmi(vol_a, vol_b)
@@ -149,6 +147,7 @@ def validate_all_registrations(
 # GPU / Memory Utilities
 # =============================================================================
 
+
 def _gpu_cache_clear(device: torch.device) -> None:
     """Comprehensive GPU memory cleanup for MPS, CUDA, and CPU."""
     logger = get_logger("pybrain")
@@ -165,7 +164,7 @@ def _gpu_cache_clear(device: torch.device) -> None:
             pass
     except Exception as e:
         logger.warning(f"GPU cache clear failed for {device.type}: {e}")
-    
+
     # Always run garbage collection as final step
     gc.collect()
 
@@ -178,7 +177,7 @@ def cleanup_model_memory(model: Optional[torch.nn.Module], device: torch.device)
             del model
         except Exception as e:
             logger.warning(f"Model deletion failed: {e}")
-    
+
     # Comprehensive GPU memory cleanup
     _gpu_cache_clear(device)
     logger.debug("Model memory cleanup completed")
@@ -188,17 +187,18 @@ def cleanup_model_memory(model: Optional[torch.nn.Module], device: torch.device)
 # nnU-Net ROI Inference Helpers
 # =============================================================================
 
+
 def _compute_nnunet_target_shape(
     roi_shape: Tuple[int, int, int],
     nn_cfg: Dict[str, Any],
 ) -> Tuple[int, int, int]:
     """Compute a padded ROI shape compatible with DynUNet strides."""
-    patch_size   = tuple(nn_cfg.get("patch_size", roi_shape))
+    patch_size = tuple(nn_cfg.get("patch_size", roi_shape))
     divisibility = tuple(nn_cfg.get("shape_multiple", (16, 16, 16)))
     target = []
     for dim, patch_dim, mult in zip(roi_shape, patch_size, divisibility):
         base = max(int(dim), int(patch_dim))
-        m    = max(1, int(mult))
+        m = max(1, int(mult))
         target.append(((base + m - 1) // m) * m)
     return cast(Tuple[int, int, int], tuple(target))
 
@@ -209,6 +209,7 @@ def _pad_tensor_to_shape(
 ) -> Tuple[Tensor, Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]]:
     """Symmetrically pad (B,C,D,H,W) tensor to target spatial shape."""
     import torch.nn.functional as F
+
     _, _, d, h, w = x.shape
     td, th, tw = target_shape
     pd, ph, pw = max(0, td - d), max(0, th - h), max(0, tw - w)
@@ -247,19 +248,16 @@ def run_nnunet_roi_inference(
     roi_shape_tuple = tuple(int(x) for x in input_tensor.shape[2:])
     if len(roi_shape_tuple) != 3:
         raise ValueError(f"Expected 3D ROI shape, got {roi_shape_tuple}")
-    roi_shape   = cast(Tuple[int, int, int], roi_shape_tuple)
+    roi_shape = cast(Tuple[int, int, int], roi_shape_tuple)
     target_shape = _compute_nnunet_target_shape(roi_shape, nn_cfg)
-    x_pad, pads  = _pad_tensor_to_shape(input_tensor, target_shape)
+    x_pad, pads = _pad_tensor_to_shape(input_tensor, target_shape)
 
     local_cfg = dict(nn_cfg)
-    local_cfg["roi_mode"]         = True
-    local_cfg["input_roi_shape"]  = roi_shape
+    local_cfg["roi_mode"] = True
+    local_cfg["input_roi_shape"] = roi_shape
     local_cfg["padded_roi_shape"] = target_shape
 
-    logger.info(
-        f"nnU-Net ROI mode: roi_shape={roi_shape}, "
-        f"padded_shape={target_shape}, pads={pads}"
-    )
+    logger.info(f"nnU-Net ROI mode: roi_shape={roi_shape}, padded_shape={target_shape}, pads={pads}")
     prob = run_nnunet_inference(x_pad, model_device, local_cfg)
     if prob is None:
         return None
@@ -272,17 +270,11 @@ def run_nnunet_roi_inference(
     if prob.shape[0] != 3:
         raise ValueError(f"nnU-Net expected 3 channels [TC,WT,ET], got shape={prob.shape}")
     if tuple(prob.shape[1:]) != target_shape:
-        raise ValueError(
-            f"nnU-Net padded output shape mismatch: "
-            f"expected {target_shape}, got {prob.shape[1:]}"
-        )
+        raise ValueError(f"nnU-Net padded output shape mismatch: expected {target_shape}, got {prob.shape[1:]}")
 
     prob = _crop_prob_to_roi(prob, pads, roi_shape)
     if tuple(prob.shape[1:]) != roi_shape:
-        raise ValueError(
-            f"nnU-Net cropped ROI shape mismatch: "
-            f"expected {roi_shape}, got {prob.shape[1:]}"
-        )
+        raise ValueError(f"nnU-Net cropped ROI shape mismatch: expected {roi_shape}, got {prob.shape[1:]}")
     return np.ascontiguousarray(prob, dtype=np.float32)
 
 
@@ -290,17 +282,18 @@ def run_nnunet_roi_inference(
 # Configuration
 # =============================================================================
 
+
 @dataclass
 class PipelineConfig:
     """Central configuration for the pipeline."""
 
     # Hardware
-    device:       torch.device
+    device: torch.device
     model_device: torch.device
 
     # Data paths
     output_dir: Path
-    monai_dir:  Path
+    monai_dir: Path
     bundle_dir: Path
 
     # Model weights (loaded from config; STAPLE may override at runtime)
@@ -312,8 +305,15 @@ class PipelineConfig:
     # CT boost parameters
     ct_boost: Dict[str, Union[float, int]]
 
+    # Per-subregion ensemble weights (optional). When enabled=True the pipeline
+    # uses run_subregion_weighted_ensemble instead of uniform weights.
+    subregion_ensemble_weights: Dict[str, Any] = field(default_factory=dict)
+
     # Per-model settings
     models: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    # Segmentation parameters (CT calcification threshold etc.)
+    segmentation: Dict[str, Any] = field(default_factory=dict)
 
     # Post-processing
     min_component_cc: float = 0.5
@@ -326,13 +326,13 @@ class PipelineConfig:
 
     # Session / patient (fetched once, reused to avoid duplicate I/O)
     patient: Dict[str, Any] = field(default_factory=dict)
-    sess:    Optional[Dict[str, Any]] = None
+    sess: Optional[Dict[str, Any]] = None
 
 
 def load_pipeline_config() -> PipelineConfig:
     """Load and validate configuration from pybrain session and config files."""
-    sess   = get_session()
-    paths  = get_paths(sess)
+    sess = get_session()
+    paths = get_paths(sess)
     config = get_config()
 
     cfg_device = torch.device(config["hardware"]["device"])
@@ -344,13 +344,14 @@ def load_pipeline_config() -> PipelineConfig:
         model_device = torch.device("cpu")
 
     output_dir = Path(paths["output_dir"])
-    monai_dir  = Path(paths["monai_dir"])
+    monai_dir = Path(paths["monai_dir"])
     bundle_dir = Path(paths["bundle_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    thresholds       = config.get("thresholds", {"wt": 0.5, "tc": 0.4, "et": 0.45})
+    thresholds = config.get("thresholds", {"wt": 0.5, "tc": 0.4, "et": 0.45})
     ensemble_weights = config.get("ensemble_weights", {"segresnet": 0.6, "tta4": 0.4})
-    ct_boost         = config.get(
+    subregion_ensemble_weights = config.get("subregion_ensemble_weights", {})
+    ct_boost = config.get(
         "ct_boost",
         {"enabled": False, "boost_factor": 0.15, "min_hu": 40, "max_hu": 60},
     )
@@ -372,9 +373,11 @@ def load_pipeline_config() -> PipelineConfig:
         monai_dir=monai_dir,
         bundle_dir=bundle_dir,
         ensemble_weights=ensemble_weights,
+        subregion_ensemble_weights=subregion_ensemble_weights,
         thresholds=thresholds,
         ct_boost=ct_boost,
         models=config.get("models", {}),
+        segmentation=config.get("segmentation", {}),
         radiologist_ref=radiologist_ref,
         patient=patient,
         sess=sess,
@@ -384,6 +387,7 @@ def load_pipeline_config() -> PipelineConfig:
 # =============================================================================
 # Data Loading & Preprocessing
 # =============================================================================
+
 
 def load_mri_volumes(monai_dir: Path) -> Tuple[Dict[str, np.ndarray], Any]:
     """
@@ -395,22 +399,20 @@ def load_mri_volumes(monai_dir: Path) -> Tuple[Dict[str, np.ndarray], Any]:
     """
     logger = get_logger("pybrain")
     seq_paths = {
-        "T1":    monai_dir / "t1_resampled.nii.gz",
-        "T1c":   monai_dir / "t1c_resampled.nii.gz",
-        "T2":    monai_dir / "t2_resampled.nii.gz",
+        "T1": monai_dir / "t1_resampled.nii.gz",
+        "T1c": monai_dir / "t1c_resampled.nii.gz",
+        "T2": monai_dir / "t2_resampled.nii.gz",
         "FLAIR": monai_dir / "flair_resampled.nii.gz",
     }
     if not all(p.exists() for p in seq_paths.values()):
         raw_paths = {
-            "T1":    monai_dir / "t1.nii.gz",
-            "T1c":   monai_dir / "t1c.nii.gz",
-            "T2":    monai_dir / "t2.nii.gz",
+            "T1": monai_dir / "t1.nii.gz",
+            "T1c": monai_dir / "t1c.nii.gz",
+            "T2": monai_dir / "t2.nii.gz",
             "FLAIR": monai_dir / "flair.nii.gz",
         }
         if all(p.exists() for p in raw_paths.values()):
-            logger.warning(
-                "Standardised BraTS volumes missing. Falling back to raw NIfTI volumes."
-            )
+            logger.warning("Standardised BraTS volumes missing. Falling back to raw NIfTI volumes.")
             seq_paths = raw_paths
         else:
             missing = [k for k, v in seq_paths.items() if not v.exists()]
@@ -440,19 +442,16 @@ def get_tumor_bbox(
     mask = prob_map > thresh
     if not np.any(mask):
         logger = get_logger("pybrain")
-        logger.warning(
-            f"No tumour voxels above threshold {thresh} — "
-            "using full volume. SegResNet may have failed."
-        )
+        logger.warning(f"No tumour voxels above threshold {thresh} — using full volume. SegResNet may have failed.")
         return (slice(None), slice(None), slice(None)), prob_map.shape
 
     coords = np.argwhere(mask)
-    min_c  = coords.min(axis=0)
-    max_c  = coords.max(axis=0)
+    min_c = coords.min(axis=0)
+    max_c = coords.max(axis=0)
     slices = []
     for i in range(3):
         start = max(0, int(min_c[i]) - margin)
-        stop  = min(int(mask.shape[i]), int(max_c[i]) + margin)
+        stop = min(int(mask.shape[i]), int(max_c[i]) + margin)
         slices.append(slice(start, stop))
     return tuple(slices), mask.shape
 
@@ -466,20 +465,17 @@ def preprocess_volumes(
     Normalise each modality and stack into a 4-channel input tensor.
     Order: (1) Histogram-normalise → (2) Bilateral filter → (3) Robust z-score.
     """
-    pre_cfg      = config.models.get("preprocessing", {})
-    do_hist      = pre_cfg.get("histogram_normalize", False)
+    pre_cfg = config.models.get("preprocessing", {})
+    do_hist = pre_cfg.get("histogram_normalize", False)
     do_bilateral = pre_cfg.get("bilateral_filter", False)
-    logger       = get_logger("pybrain")
+    get_logger("pybrain")
 
     first_shape = next(iter(volumes.values())).shape
     for name, vol in volumes.items():
         if vol.ndim != 3:
             raise ValueError(f"{name} is {vol.ndim}D, expected 3D.")
         if vol.shape != first_shape:
-            raise ValueError(
-                f"{name} shape {vol.shape} != first volume {first_shape} — "
-                "registration may have failed."
-            )
+            raise ValueError(f"{name} shape {vol.shape} != first volume {first_shape} — registration may have failed.")
 
     norm_vols: Dict[str, np.ndarray] = {}
     for name in ["FLAIR", "T1", "T2", "T1c"]:
@@ -487,13 +483,15 @@ def preprocess_volumes(
 
         if do_hist:
             from monai.transforms.intensity.array import HistogramNormalize
+
             tnfm = HistogramNormalize(num_bins=256, min=0, max=1)
-            vol  = tnfm(vol[np.newaxis])[0]  # type: ignore[assignment]
+            vol = tnfm(vol[np.newaxis])[0]  # type: ignore[assignment]
             if hasattr(vol, "numpy"):
                 vol = vol.detach().cpu().numpy() if hasattr(vol, "detach") else vol.numpy()  # type: ignore[attr-defined]
 
         if do_bilateral and name in ["FLAIR", "T1c"]:
             from skimage.restoration import denoise_bilateral
+
             strength = pre_cfg.get("denoise_strength", 0.05)
             if hasattr(vol, "numpy"):
                 vol = vol.detach().cpu().numpy() if hasattr(vol, "detach") else vol.numpy()  # type: ignore[attr-defined]
@@ -515,9 +513,7 @@ def preprocess_volumes(
     )
 
     if brain_mask.shape != stacked.shape[1:]:
-        raise ValueError(
-            f"Brain mask shape {brain_mask.shape} != volume shape {stacked.shape[1:]}."
-        )
+        raise ValueError(f"Brain mask shape {brain_mask.shape} != volume shape {stacked.shape[1:]}.")
 
     stacked = stacked * brain_mask.astype(np.float32)
     return torch.from_numpy(stacked).unsqueeze(0)
@@ -526,6 +522,7 @@ def preprocess_volumes(
 # =============================================================================
 # Model Inference
 # =============================================================================
+
 
 def run_models(
     input_tensor: Tensor,
@@ -561,34 +558,38 @@ def run_models(
     else:
         try:
             logger.info("Loading SegResNet...")
-            model  = load_segresnet(config.bundle_dir, config.model_device)
+            model = load_segresnet(config.bundle_dir, config.model_device)
             sr_cfg = config.models.get("segresnet", {})
-            
+
             # Standard inference - ALWAYS used for final segmentation
             prob_standard = run_segresnet_inference(
-                model, input_tensor, config.device, sr_cfg,
+                model,
+                input_tensor,
+                config.device,
+                sr_cfg,
                 model_device=config.model_device,
             )
             results["segresnet"] = prob_standard
-            
+
             # MC-Dropout - runs in parallel for uncertainty quantification only
             if mc_enabled and "segresnet" in mc_config.get("models", []):
-                from pybrain.models.mc_dropout import run_mc_dropout_inference, compute_uncertainty_metrics
+                from pybrain.models.mc_dropout import run_mc_dropout_inference
+
                 n_samples_mc = min(n_samples, 15)  # Cap at 15 for speed
                 logger.info(f"Running MC-Dropout ({n_samples_mc} samples) for uncertainty quantification...")
                 mean_prob_mc, std_prob_mc = run_mc_dropout_inference(
                     model, input_tensor, config.device, n_samples_mc, sr_cfg, config.model_device
                 )
                 mc_uncertainties["segresnet"] = std_prob_mc
-                
+
                 # Log comparison between standard and MC-Dropout mean
                 diff = np.abs(prob_standard - mean_prob_mc).mean()
                 logger.info(f"MC-Dropout: mean_std={std_prob_mc.mean():.4f}, max_std={std_prob_mc.max():.4f}")
                 logger.info(f"MC-Dropout: mean_abs_diff_from_standard={diff:.6f}")
-                
+
                 # Store MC-Dropout mean for separate saving (doesn't affect segmentation)
                 mc_uncertainties["segresnet_mean_prob"] = mean_prob_mc
-                
+
             cleanup_model_memory(model, config.model_device)
         except Exception as e:
             logger.warning(f"SegResNet failed: {e}")
@@ -600,10 +601,13 @@ def run_models(
     else:
         try:
             logger.info("Running SegResNet with TTA-4...")
-            model   = load_segresnet(config.bundle_dir, config.model_device)
+            model = load_segresnet(config.bundle_dir, config.model_device)
             tta_cfg = config.models.get("tta4", {})
-            prob    = run_tta_ensemble(
-                model, input_tensor, config.device, tta_cfg,
+            prob = run_tta_ensemble(
+                model,
+                input_tensor,
+                config.device,
+                tta_cfg,
                 model_device=config.model_device,
             )
             results["tta4"] = prob
@@ -622,9 +626,7 @@ def run_models(
         try:
             swin_cfg = config.models.get("swinunetr", {})
             logger.info("Running SwinUNETR ensemble (multi-fold)...")
-            prob = run_swinunetr_inference(
-                input_tensor, config.bundle_dir, config.device, model_cfg=swin_cfg
-            )
+            prob = run_swinunetr_inference(input_tensor, config.bundle_dir, config.device, model_cfg=swin_cfg)
             results["swinunetr"] = prob
             cleanup_model_memory(None, config.model_device)
         except Exception as e:
@@ -665,7 +667,7 @@ def fuse_ensemble(
 
     Enhanced with subregion-specific weights for optimized Dice scores:
     - WT: SwinUNETR weighted higher (edema boundaries)
-    - TC: SegResNet weighted higher (core structures)  
+    - TC: SegResNet weighted higher (core structures)
     - ET: SwinUNETR + SegResNet weighted higher (enhancing tumor)
     """
     logger = get_logger("pybrain")
@@ -673,48 +675,44 @@ def fuse_ensemble(
         raise RuntimeError("No model predictions available for ensemble.")
 
     # Check if subregion-specific weights are enabled
-    subregion_config = getattr(config, 'subregion_ensemble_weights', {})
-    
-    if subregion_config.get('enabled', False):
+    subregion_config = getattr(config, "subregion_ensemble_weights", {})
+
+    if subregion_config.get("enabled", False):
         # Use subregion-specific ensemble
         from pybrain.models.subregion_ensemble import run_subregion_weighted_ensemble
-        
+
         # Get subregion weights
         subregion_weights = {
-            'WT': subregion_config.get('WT', {}),
-            'TC': subregion_config.get('TC', {}),
-            'ET': subregion_config.get('ET', {})
+            "WT": subregion_config.get("WT", {}),
+            "TC": subregion_config.get("TC", {}),
+            "ET": subregion_config.get("ET", {}),
         }
-        
+
         # Adaptive weights if enabled
-        if subregion_config.get('adaptive', False):
+        if subregion_config.get("adaptive", False):
             from pybrain.models.subregion_ensemble import adaptive_subregion_weights
+
             subregion_weights = adaptive_subregion_weights(
-                [(name, prob, config.ensemble_weights.get(name, 1.0)) 
-                 for name, prob in model_probs.items()],
-                uncertainty_map=uncertainty
+                [(name, prob, config.ensemble_weights.get(name, 1.0)) for name, prob in model_probs.items()],
+                uncertainty_map=uncertainty,
             )
-        
+
         # Validate weights
         from pybrain.models.subregion_ensemble import validate_subregion_weights
+
         validate_subregion_weights(subregion_weights, list(model_probs.keys()))
-        
+
         # Create model list with base weights
-        model_list = [
-            (name, prob, config.ensemble_weights.get(name, 1.0))
-            for name, prob in model_probs.items()
-        ]
-        
+        model_list = [(name, prob, config.ensemble_weights.get(name, 1.0)) for name, prob in model_probs.items()]
+
         logger.info("Using subregion-specific ensemble weights")
-        ensemble_prob, contributed = run_subregion_weighted_ensemble(
-            model_list, subregion_weights
-        )
-        return ensemble_prob, contributed, False   # staple_used=False
+        ensemble_prob, contributed = run_subregion_weighted_ensemble(model_list, subregion_weights)
+        return ensemble_prob, contributed, False  # staple_used=False
 
     else:
         # Check if STAPLE ensemble is enabled
         staple_config = config.models.get("staple_ensemble", {})
-        
+
         if staple_config.get("enabled", False) and len(model_probs) >= 2:
             logger.info("Using STAPLE ensemble for data-driven weight optimization")
             from pybrain.models.staple_ensemble import run_staple_ensemble, validate_staple_weights
@@ -725,29 +723,26 @@ def fuse_ensemble(
                 ensemble_prob = run_staple_ensemble(model_probs, subregion_weights)
                 contributed = list(model_probs.keys())
                 logger.info(f"STAPLE ensemble completed with {len(contributed)} models")
-                return ensemble_prob, contributed, True   # staple_used=True
+                return ensemble_prob, contributed, True  # staple_used=True
             else:
                 logger.warning("Current weights not suitable for STAPLE, falling back to weighted ensemble")
                 model_list = [
-                    (name, prob, config.ensemble_weights.get(name, 1.0))
-                    for name, prob in model_probs.items()
+                    (name, prob, config.ensemble_weights.get(name, 1.0)) for name, prob in model_probs.items()
                 ]
                 ensemble_prob, contributed = run_weighted_ensemble(model_list)
         else:
             # Use original uniform ensemble
-            model_list = [
-                (name, prob, config.ensemble_weights.get(name, 1.0))
-                for name, prob in model_probs.items()
-            ]
+            model_list = [(name, prob, config.ensemble_weights.get(name, 1.0)) for name, prob in model_probs.items()]
             ensemble_prob, contributed = run_weighted_ensemble(model_list)
             logger.info("Using uniform ensemble weights")
 
-    return ensemble_prob, contributed, False   # staple_used=False
+    return ensemble_prob, contributed, False  # staple_used=False
 
 
 # =============================================================================
 # CT Boost
 # =============================================================================
+
 
 def apply_ct_boost(
     ensemble_prob: np.ndarray,
@@ -765,44 +760,42 @@ def apply_ct_boost(
     CT-driven false positives. Registration is validated with CT-MRI NMI
     before any boost is applied.
     """
-    logger   = get_logger("pybrain")
+    logger = get_logger("pybrain")
     boost_cfg = config.ct_boost
     if not boost_cfg.get("enabled", False):
         return ensemble_prob
 
-    min_hu       = boost_cfg.get("min_hu", 35)
-    max_hu       = boost_cfg.get("max_hu", 75)
+    min_hu = boost_cfg.get("min_hu", 35)
+    max_hu = boost_cfg.get("max_hu", 75)
     boost_factor = boost_cfg.get("boost_factor", 0.30)
-    wt_shape     = ensemble_prob[1].shape
+    wt_shape = ensemble_prob[1].shape
 
     if ct_data.shape != wt_shape:
-        logger.warning(
-            f"CT boost skipped: CT shape {ct_data.shape} != WT prob shape {wt_shape}."
-        )
+        logger.warning(f"CT boost skipped: CT shape {ct_data.shape} != WT prob shape {wt_shape}.")
         return ensemble_prob
 
     # ── NMI Registration Validation ───────────────────────────────────────
     if boost_cfg.get("nmi_validation", True) and mri_data is not None:
         from pybrain.utils.registration_validation import should_apply_ct_boost
-        
+
         nmi_threshold = boost_cfg.get("nmi_threshold", 1.3)
         force_enable = boost_cfg.get("force_enable", False)
-        
+
         # Use T1c channel for NMI validation (best for CT-MRI alignment)
         if len(mri_data.shape) == 4 and mri_data.shape[0] >= 2:  # Multi-modal MRI
             mri_for_nmi = mri_data[2]  # T1c channel (index 2)
         else:
             mri_for_nmi = mri_data
-        
+
         should_apply, validation_results = should_apply_ct_boost(
             mri_for_nmi, ct_data, brain_mask, nmi_threshold, bool(force_enable)
         )
-        
+
         if not should_apply:
-            logger.warning(f"CT boost disabled due to registration validation failure")
+            logger.warning("CT boost disabled due to registration validation failure")
             logger.warning(f"NMI: {validation_results.get('nmi', 'N/A'):.3f} < {nmi_threshold}")
             return ensemble_prob
-        
+
         logger.info(f"CT boost enabled after NMI validation: {validation_results.get('nmi', 'N/A'):.3f}")
     # ────────────────────────────────────────────────────────────────────────
 
@@ -817,20 +810,17 @@ def apply_ct_boost(
             logger.info(f"  CT–MRI NMI (Studholme) = {nmi:.4f}  (threshold = {nmi_thresh_internal:.4f})")
             if nmi < nmi_thresh_internal:
                 logger.warning(
-                    f"CT boost skipped: Studholme NMI {nmi:.4f} < {nmi_thresh_internal:.4f}. "
-                    "Poor CT–MRI registration."
+                    f"CT boost skipped: Studholme NMI {nmi:.4f} < {nmi_thresh_internal:.4f}. Poor CT–MRI registration."
                 )
                 return ensemble_prob
 
     if brain_mask is not None:
         ct_data = ct_data * brain_mask
 
-    ct_prior  = ((ct_data >= min_hu) & (ct_data <= max_hu)).astype(np.float32)
-    wt_prob   = ensemble_prob[1]
+    ct_prior = ((ct_data >= min_hu) & (ct_data <= max_hu)).astype(np.float32)
+    wt_prob = ensemble_prob[1]
     tumor_gate = (wt_prob >= 0.30).astype(np.float32)
-    ensemble_prob[1] = np.clip(
-        wt_prob + boost_factor * ct_prior * tumor_gate * wt_prob, 0, 1
-    )
+    ensemble_prob[1] = np.clip(wt_prob + boost_factor * ct_prior * tumor_gate * wt_prob, 0, 1)
     logger.info(f"CT boost applied (HU [{min_hu}, {max_hu}], factor={boost_factor})")
     return ensemble_prob
 
@@ -838,6 +828,7 @@ def apply_ct_boost(
 # =============================================================================
 # Platt Scaling (Probability Calibration)
 # =============================================================================
+
 
 def apply_platt_calibration(
     ensemble_prob: np.ndarray,
@@ -856,7 +847,7 @@ def apply_platt_calibration(
     Until calibration coefficients are available the function falls back to
     identity (no adjustment), which is safer than unvalidated empirical boosts.
     """
-    logger   = get_logger("pybrain")
+    logger = get_logger("pybrain")
     # Resolve calibration file from project root (bundle_dir is in models/brats_bundle/)
     project_root = config.bundle_dir.parent.parent  # models/brats_bundle/ -> models/ -> project root
     rel_path = config.models.get("platt_calibration", {}).get(
@@ -898,6 +889,7 @@ def apply_platt_calibration(
 # Post-processing
 # =============================================================================
 
+
 def postprocess_segmentation(
     ensemble_prob: np.ndarray,
     brain_mask: np.ndarray,
@@ -921,7 +913,7 @@ def postprocess_segmentation(
       6. BraTS label derivation (necrosis, edema, enhancing).
       7. Small isolated component removal.
     """
-    logger   = get_logger("pybrain")
+    logger = get_logger("pybrain")
     post_cfg = config.models.get("postprocessing", {})
 
     # ── 1. Probability Calibration ──────────────────────────────────────────────────
@@ -939,24 +931,33 @@ def postprocess_segmentation(
     # otherwise fall back to config values.
     if threshold_overrides:
         final_thresholds = {
-            'tc': threshold_overrides.get('tc', config.thresholds.get('tc', 0.35)),
-            'wt': threshold_overrides.get('wt', config.thresholds.get('wt', 0.35)),
-            'et': threshold_overrides.get('et', config.thresholds.get('et', 0.35)),
+            "tc": threshold_overrides.get("tc", config.thresholds.get("tc", 0.35)),
+            "wt": threshold_overrides.get("wt", config.thresholds.get("wt", 0.35)),
+            "et": threshold_overrides.get("et", config.thresholds.get("et", 0.35)),
         }
         logger.info("Using pre-computed adaptive thresholds (statistical_thresholds enabled)")
     else:
         final_thresholds = {
-            'tc': config.thresholds.get('tc', 0.35),
-            'wt': config.thresholds.get('wt', 0.35),
-            'et': config.thresholds.get('et', 0.35),
+            "tc": config.thresholds.get("tc", 0.35),
+            "wt": config.thresholds.get("wt", 0.35),
+            "et": config.thresholds.get("et", 0.35),
         }
 
-    wt_thresh = final_thresholds['wt']
-    tc_thresh = final_thresholds['tc']
-    et_thresh = final_thresholds['et']
+    wt_thresh = final_thresholds["wt"]
+    tc_thresh = final_thresholds["tc"]
+    et_thresh = final_thresholds["et"]
     logger.info(f"Thresholds applied: WT={wt_thresh}  TC={tc_thresh}  ET={et_thresh}")
 
     # ── 2. Threshold + hierarchical consistency ───────────────────────────────
+    wt_prob = ensemble_prob[1]
+    _max_prob = float(wt_prob.max())
+    _model_non_activation = _max_prob < 0.10
+    if _model_non_activation:
+        logger.warning(
+            f"⚠️  MODEL NON-ACTIVATION DETECTED — max_prob={_max_prob:.3f} < 0.10 "
+            "(BraTS model sees no tumour signal; likely non-GBM pathology)"
+        )
+
     wt_bin = (wt_prob > wt_thresh).astype(np.float32) * brain_mask
     tc_bin = (tc_prob > tc_thresh).astype(np.float32) * brain_mask * wt_bin
     et_bin = (et_prob > et_thresh).astype(np.float32) * brain_mask * tc_bin
@@ -964,10 +965,11 @@ def postprocess_segmentation(
     # ── 3. Shape-based component filtering ────────────────────────────────────
     if post_cfg.get("shape_filtering", True):
         from skimage.measure import label, regionprops
-        labels    = label(wt_bin > 0)
-        props     = regionprops(labels)
-        max_ecc   = post_cfg.get("max_eccentricity", 0.98)
-        min_sol   = post_cfg.get("min_solidity", 0.55)
+
+        labels = label(wt_bin > 0)
+        props = regionprops(labels)
+        max_ecc = post_cfg.get("max_eccentricity", 0.98)
+        min_sol = post_cfg.get("min_solidity", 0.55)
         keep_mask = np.zeros_like(wt_bin, dtype=bool)
         for p in props:
             is_good = (
@@ -996,36 +998,187 @@ def postprocess_segmentation(
 
     # ── 5. Anatomical constraints ─────────────────────────────────────────────
     if post_cfg.get("anatomical_constraints", True):
-        tumor_type      = config.patient.get("tumor_type", "")
-        surface_thresh  = _resolve_surface_threshold(tumor_type, config)
-        wt_bin = apply_anatomical_constraints(
-            wt_bin, brain_mask, voxel_spacing, surface_thresh
-        )
+        tumor_type = config.patient.get("tumor_type", "")
+        surface_thresh = _resolve_surface_threshold(tumor_type, config)
+        wt_bin = apply_anatomical_constraints(wt_bin, brain_mask, voxel_spacing, surface_thresh)
         tc_bin = tc_bin * (wt_bin > 0)
         et_bin = et_bin * (wt_bin > 0)
 
     # ── 6. BraTS label derivation ─────────────────────────────────────────────
     enhancing = et_bin
-    necrotic  = np.clip(tc_bin - enhancing, 0, 1)
-    edema     = np.clip(wt_bin - tc_bin,    0, 1)
+    necrotic = np.clip(tc_bin - enhancing, 0, 1)
+    edema = np.clip(wt_bin - tc_bin, 0, 1)
 
     seg_full = np.zeros_like(necrotic, dtype=np.uint8)
-    seg_full[edema    > 0] = 2
+    seg_full[edema > 0] = 2
     seg_full[necrotic > 0] = 1
     seg_full[enhancing > 0] = 4  # BraTS convention: 4 = enhancing tumor
+
+    # ── 6b. Prune edema unlikely to be tumour-related ─────────────────────────
+    # BraTS-trained models over-predict FLAIR-hyperintense regions in elderly
+    # patients with leukoaraiosis (age-related small-vessel disease). Real
+    # peritumoural edema is (a) spatially contiguous with the solid tumour
+    # core (NCR ∪ ET) and (b) within a bounded distance of that core
+    # (typically ≤30-40 mm for GBM).
+    #
+    # Two-stage cleanup:
+    #   (i)  Remove edema connected-components that contain no core voxel
+    #        (allowing a small dilation to absorb segmentation boundary noise).
+    #        Handles isolated FLAIR-hyperintense islands.
+    #   (ii) Remove edema voxels that are geometrically farther than
+    #        `edema_max_distance_mm` from the nearest core voxel. Handles
+    #        leukoaraiosis that is artefactually connected to peritumoural
+    #        edema through intermediate hyperintense white matter.
+    # Distance map from edema → core. Computed in 6b if needed there, and
+    # reused in 6c for distance-tiered FLAIR-z thresholding.
+    dist_to_core_map: Optional[np.ndarray] = None
+    core_mask_global = (necrotic > 0) | (enhancing > 0)
+
+    if post_cfg.get("prune_isolated_edema", True):
+        core_mask = core_mask_global
+        if core_mask.any():
+            gap_mm = float(post_cfg.get("edema_core_gap_mm", 3.0))
+            min_vs = float(min(voxel_spacing)) or 1.0
+            iters = max(1, int(round(gap_mm / min_vs)))
+            core_expanded = ndi.binary_dilation(core_mask, iterations=iters)
+
+            # (i) Connected-component pruning
+            wt_mask_full = seg_full > 0
+            labeled_wt, n_wt = ndi.label(wt_mask_full)  # type: ignore[arg-type]
+            n_wt = int(n_wt)
+            keep_wt = np.zeros_like(wt_mask_full, dtype=bool)
+            kept_comps = 0
+            for cid in range(1, n_wt + 1):
+                comp = labeled_wt == cid
+                if bool((core_expanded & comp).any()):
+                    keep_wt |= comp
+                    kept_comps += 1
+
+            removed_vox_comp = int((wt_mask_full & ~keep_wt).sum())
+            if removed_vox_comp > 0:
+                logger.info(
+                    "Pruned %d isolated edema component(s) disconnected from core: "
+                    "%.1f cc removed (kept %d of %d WT components; gap tolerance %.1f mm)",
+                    n_wt - kept_comps,
+                    removed_vox_comp * vox_vol_cc,
+                    kept_comps,
+                    n_wt,
+                    gap_mm,
+                )
+
+            # (ii) Distance-based pruning. Compute distance map once and
+            # stash for reuse by 6c (FLAIR-intensity filter).
+            max_dist_mm = float(post_cfg.get("edema_max_distance_mm", 40.0))
+            if max_dist_mm > 0 or post_cfg.get("edema_zscore_distance_tiers"):
+                # Distance from every voxel to the nearest core voxel, in mm.
+                dist_to_core = ndi.distance_transform_edt(~core_mask, sampling=voxel_spacing)
+                if isinstance(dist_to_core, tuple):  # distance_transform_edt can return a tuple
+                    dist_to_core = dist_to_core[0]
+                dist_to_core_map = dist_to_core  # cache for 6c
+            if max_dist_mm > 0 and dist_to_core_map is not None:
+                # Only enforce the constraint on edema voxels (core is
+                # distance 0 by construction; never prune it).
+                edema_mask_current = (seg_full == 2) & keep_wt
+                edema_too_far = edema_mask_current & (dist_to_core_map > max_dist_mm)  # type: ignore[operator]
+                removed_vox_dist = int(edema_too_far.sum())
+                if removed_vox_dist > 0:
+                    logger.info(
+                        "Pruned %.1f cc of edema beyond %.0f mm from tumour core "
+                        "(likely leukoaraiosis / non-tumour FLAIR hyperintensity).",
+                        removed_vox_dist * vox_vol_cc,
+                        max_dist_mm,
+                    )
+                    keep_wt = keep_wt & ~edema_too_far
+
+            # Apply final mask
+            total_removed = int((wt_mask_full & ~keep_wt).sum())
+            if total_removed > 0:
+                seg_full[~keep_wt] = 0
+                edema = edema * keep_wt.astype(edema.dtype)
+                necrotic = necrotic * keep_wt.astype(necrotic.dtype)
+                enhancing = enhancing * keep_wt.astype(enhancing.dtype)
+
+    # ── 6c. FLAIR-intensity edema filter ──────────────────────────────────────
+    # Real peritumoural (vasogenic) edema is markedly hyperintense on FLAIR —
+    # typically ≥1 robust SD above the median FLAIR of non-tumour brain.
+    # Leukoaraiosis lesions are hyperintense too, but the magnitude is much
+    # smaller, especially in periventricular caps far from the tumour core.
+    # Reject edema voxels whose FLAIR signal is too dim relative to a
+    # within-patient reference computed from non-tumour brain parenchyma.
+    if post_cfg.get("edema_intensity_filter", True):
+        flair_vol = volumes.get("FLAIR")
+        if flair_vol is not None and brain_mask is not None:
+            non_tumour_brain = (brain_mask > 0) & (seg_full == 0)
+            n_ref = int(non_tumour_brain.sum())
+            if n_ref > 1000:  # need enough reference voxels for a stable estimate
+                flair_ref = flair_vol[non_tumour_brain]
+                flair_med = float(np.median(flair_ref))
+                flair_mad = float(np.median(np.abs(flair_ref - flair_med)))
+                # MAD-based robust SD estimator (1/Φ⁻¹(0.75) ≈ 1.4826).
+                flair_sd = max(flair_mad * 1.4826, 1e-6)
+
+                edema_mask_curr = seg_full == 2
+                flair_z = (flair_vol - flair_med) / flair_sd
+
+                # Distance-tiered z-threshold (preferred): real peritumoural
+                # edema can be relatively dim immediately adjacent to the core
+                # (where infiltrative tumour blends with white matter), but
+                # distant FLAIR hyperintensity should be markedly bright to
+                # qualify as edema rather than leukoaraiosis. Tiers are a list
+                # of (max_distance_mm, min_zscore) pairs evaluated in order;
+                # the last tier acts as the fallback for any voxel beyond
+                # the previous distance.
+                tiers = post_cfg.get("edema_zscore_distance_tiers", None)
+                if tiers and dist_to_core_map is not None:
+                    # Build per-voxel z-threshold map by walking tiers.
+                    # Default: voxels beyond every tier are kept only if they
+                    # exceed the strictest tier's z (acts as a hard floor).
+                    tiers_norm = [(float(d), float(z)) for d, z in tiers]
+                    z_threshold = np.full_like(flair_z, tiers_norm[-1][1], dtype=np.float32)
+                    # Walk tiers in increasing distance: assign threshold to
+                    # voxels falling in [prev_d, cur_d).
+                    prev_d = -1.0
+                    for d_max, z_min in tiers_norm:
+                        in_band = (dist_to_core_map > prev_d) & (dist_to_core_map <= d_max)
+                        z_threshold = np.where(in_band, z_min, z_threshold)
+                        prev_d = d_max
+                    edema_too_dim = edema_mask_curr & (flair_z < z_threshold)
+                    rule_desc = "tiered " + ", ".join(f"d≤{d:.0f}mm:z≥{z:.2f}" for d, z in tiers_norm)
+                else:
+                    min_z = float(post_cfg.get("edema_min_flair_zscore", 1.0))
+                    edema_too_dim = edema_mask_curr & (flair_z < min_z)
+                    rule_desc = f"uniform z≥{min_z:.2f}"
+
+                n_dim = int(edema_too_dim.sum())
+                if n_dim > 0:
+                    logger.info(
+                        "FLAIR-intensity filter (%s): pruned %.1f cc of edema "
+                        "(likely leukoaraiosis / age-related WM hyperintensity).",
+                        rule_desc,
+                        n_dim * vox_vol_cc,
+                    )
+                    seg_full[edema_too_dim] = 0
+                    edema = edema * (~edema_too_dim).astype(edema.dtype)
+            else:
+                logger.warning(
+                    "FLAIR-intensity filter skipped: only %d non-tumour brain "
+                    "voxels available (need >1000 for stable reference).",
+                    n_ref,
+                )
 
     # ── 7. Small component removal ────────────────────────────────────────────
     min_voxels = max(1, int(config.min_component_cc / vox_vol_cc))
     labeled, n_comp = ndi.label(seg_full > 0)  # type: ignore[arg-type]
     if n_comp > 1:
-        sizes  = ndi.sum(seg_full > 0, labeled, list(range(1, n_comp + 1)))
+        sizes = ndi.sum(seg_full > 0, labeled, list(range(1, n_comp + 1)))
         largest = int(np.argmax(sizes)) + 1
-        keep    = np.zeros(seg_full.shape, dtype=bool)
+        keep = np.zeros(seg_full.shape, dtype=bool)
         for i, sz in enumerate(sizes, start=1):
             if sz >= min_voxels or i == largest:
                 keep[labeled == i] = True
         seg_full[~keep] = 0
 
+    final_thresholds["_model_non_activation"] = _model_non_activation
     return seg_full, necrotic, edema, enhancing, final_thresholds
 
 
@@ -1084,7 +1237,7 @@ def apply_anatomical_constraints(
     # Stage 1: hard brain parenchyma limit
     mask = mask * (brain_mask > 0)
 
-    if surface_thresh_mm >= 900:          # leptomeningeal — skip suppression
+    if surface_thresh_mm >= 900:  # leptomeningeal — skip suppression
         return mask.astype(np.float32)
 
     # Stage 2: distance from brain surface using true voxel spacing
@@ -1093,10 +1246,13 @@ def apply_anatomical_constraints(
     # brain and 0 outside, so each brain voxel gets its depth from the
     # brain surface (nearest exterior voxel).
     brain_interior = np.where(brain_mask > 0, 1, 0).astype(np.float32)
-    dist_from_surface = np.asarray(distance_transform_edt(
-        brain_interior,
-        sampling=voxel_spacing,           # (sz, sy, sx) in mm — true anisotropic
-    ), dtype=np.float32)
+    dist_from_surface = np.asarray(
+        distance_transform_edt(
+            brain_interior,
+            sampling=voxel_spacing,  # (sz, sy, sx) in mm — true anisotropic
+        ),
+        dtype=np.float32,
+    )
 
     labeled, n_comp = ndi.label(mask > 0)  # type: ignore[assignment]
     n_comp = int(n_comp)
@@ -1106,7 +1262,7 @@ def apply_anatomical_constraints(
     suppress_mask = np.zeros_like(mask, dtype=bool)
 
     for comp_id in range(1, n_comp + 1):
-        comp_mask = (labeled == comp_id)
+        comp_mask = labeled == comp_id
         # Use the MAXIMUM distance (deepest voxel) in this component.
         # If even the deepest voxel is within the threshold, the entire
         # component is superficial noise and should be suppressed.
@@ -1146,11 +1302,11 @@ def apply_3d_crf(
             if m_slice.max() == 0:
                 continue
             labels = (m_slice > 0.5).astype(np.int32)
-            unary  = unary_from_labels(labels, 2, gt_prob=0.8)
-            d      = dcrf.DenseCRF2D(m_slice.shape[1], m_slice.shape[0], 2)
+            unary = unary_from_labels(labels, 2, gt_prob=0.8)
+            d = dcrf.DenseCRF2D(m_slice.shape[1], m_slice.shape[0], 2)
             d.setUnaryEnergy(unary)
             d.addPairwiseGaussian(sxy=3, compat=3)
-            img_c   = (norm01(i_slice) * 255).astype(np.uint8)
+            img_c = (norm01(i_slice) * 255).astype(np.uint8)
             img_3ch = np.ascontiguousarray(np.stack([img_c, img_c, img_c], axis=-1))
             d.addPairwiseBilateral(sxy=5, srgb=5, rgbim=img_3ch, compat=10)
             q = d.inference(5)
@@ -1179,13 +1335,11 @@ def apply_calibration(
     JSON file and scales each subregion volume independently.
     Returns a dict of calibrated volumes.
     """
-    cal_cfg     = config.models.get("calibration", {})
+    cal_cfg = config.models.get("calibration", {})
     if not cal_cfg.get("enabled", True):
         return dict(volumes_cc)
 
-    factor_path = config.output_dir.parent / cal_cfg.get(
-        "factor_file", "calibration_factors.json"
-    )
+    factor_path = config.output_dir.parent / cal_cfg.get("factor_file", "calibration_factors.json")
 
     factors: Dict[str, float] = {k: 1.0 for k in _SUBREGION_KEYS}
     if factor_path.exists():
@@ -1210,19 +1364,15 @@ def update_calibration_ema(
     Iterates over WT / TC / ET / NC.  Any subregion without a radiologist
     reference for the current exam is skipped — its EMA factor is unchanged.
     """
-    logger   = get_logger("pybrain")
-    cal_cfg  = config.models.get("calibration", {})
-    alpha    = cal_cfg.get("ema_alpha", 0.2)
-    factor_path = config.output_dir.parent / cal_cfg.get(
-        "factor_file", "calibration_factors.json"
-    )
+    logger = get_logger("pybrain")
+    cal_cfg = config.models.get("calibration", {})
+    alpha = cal_cfg.get("ema_alpha", 0.2)
+    factor_path = config.output_dir.parent / cal_cfg.get("factor_file", "calibration_factors.json")
 
     # Guard: only update EMA when at least one radiologist reference is present.
     # If radiologist_ref is absent or all values are None, the AI's own predictions
     # would become the reference — accumulating and compounding over successive runs.
-    has_any_ref = any(
-        config.radiologist_ref.get(k) is not None for k in _SUBREGION_KEYS
-    )
+    has_any_ref = any(config.radiologist_ref.get(k) is not None for k in _SUBREGION_KEYS)
     if not has_any_ref:
         logger.info(
             "EMA calibration update skipped: no radiologist reference values present. "
@@ -1242,18 +1392,16 @@ def update_calibration_ema(
     updated = False
     for key in _SUBREGION_KEYS:
         ref_val = config.radiologist_ref.get(key)
-        ai_vol  = volumes_cc.get(key, 0.0)
+        ai_vol = volumes_cc.get(key, 0.0)
         if ref_val is None or ai_vol < 1e-6:
             continue
 
         current_ratio = float(ref_val) / ai_vol
-        prev          = stored.get(key, {})
-        prev_factor   = float(prev.get("factor", current_ratio))
-        prev_samples  = int(prev.get("samples", 0))
+        prev = stored.get(key, {})
+        prev_factor = float(prev.get("factor", current_ratio))
+        prev_samples = int(prev.get("samples", 0))
 
-        new_factor  = current_ratio if prev_samples == 0 else (
-            alpha * current_ratio + (1 - alpha) * prev_factor
-        )
+        new_factor = current_ratio if prev_samples == 0 else (alpha * current_ratio + (1 - alpha) * prev_factor)
         stored[key] = {"factor": new_factor, "samples": prev_samples + 1}
 
         logger.info(
@@ -1273,6 +1421,7 @@ def update_calibration_ema(
 # Longitudinal Tracking
 # =============================================================================
 
+
 def compute_longitudinal_delta(
     volumes_cc: Dict[str, float],
     config: PipelineConfig,
@@ -1287,7 +1436,7 @@ def compute_longitudinal_delta(
 
     Returns a dict of {subregion: delta_cc} or {subregion: None} if no prior.
     """
-    logger    = get_logger("pybrain")
+    logger = get_logger("pybrain")
     prior_path = config.output_dir.parent / "prior_volumes.json"
 
     if not prior_path.exists():
@@ -1304,10 +1453,10 @@ def compute_longitudinal_delta(
     deltas: Dict[str, Optional[float]] = {}
     for key in _SUBREGION_KEYS:
         prior_val = prior.get(key)
-        curr_val  = volumes_cc.get(key, 0.0)
-        if prior_val is not None:
+        curr_val = volumes_cc.get(key, 0.0)
+        if prior_val is not None and float(prior_val) > 0.0:
             delta = curr_val - float(prior_val)
-            pct   = 100.0 * delta / (float(prior_val) + 1e-8)
+            pct = 100.0 * delta / float(prior_val)
             deltas[key] = round(delta, 3)
             logger.info(
                 f"  Longitudinal [{key.upper()}]: "
@@ -1316,6 +1465,8 @@ def compute_longitudinal_delta(
             )
         else:
             deltas[key] = None
+            if prior_val is None or float(prior_val) == 0.0:
+                logger.info(f"  Longitudinal [{key.upper()}]: {curr_val:.2f} cc (no prior exam)")
 
     return deltas
 
@@ -1334,6 +1485,7 @@ def save_current_volumes_as_prior(
 # Visualization
 # =============================================================================
 
+
 def _select_tumor_slices(
     wt_prob: np.ndarray,
     axis: int,
@@ -1347,8 +1499,8 @@ def _select_tumor_slices(
     returned slices entirely outside the tumour.  This version sums the WT
     probability along the chosen axis and picks the top-N indices.
     """
-    sums      = wt_prob.sum(axis=tuple(i for i in range(3) if i != axis))
-    top_idx   = np.argsort(sums)[::-1][:n_slices]
+    sums = wt_prob.sum(axis=tuple(i for i in range(3) if i != axis))
+    top_idx = np.argsort(sums)[::-1][:n_slices]
     return np.sort(top_idx)
 
 
@@ -1363,13 +1515,11 @@ def generate_visualization(
     Create three orthogonal views (axial, coronal, sagittal) with tumour overlays.
     Slices are ranked by WT probability mass rather than chosen equidistantly. [FIX-6]
     """
-    norm_vols   = {k: norm01(volumes[k]) for k in ["T1", "T1c", "FLAIR"]}
+    norm_vols = {k: norm01(volumes[k]) for k in ["T1", "T1c", "FLAIR"]}
     comp_colors = {"necrotic": "#4499ff", "edema": "#44ee44", "enhancing": "#ff4444"}
 
     # Fallback: use edema mask as a proxy when no prob map is provided
-    proxy_prob = wt_prob if wt_prob is not None else (
-        seg_components.get("edema", np.zeros_like(volumes["T1"]))
-    )
+    proxy_prob = wt_prob if wt_prob is not None else (seg_components.get("edema", np.zeros_like(volumes["T1"])))
 
     def get_slice(arr: np.ndarray, axis: int, idx: int) -> np.ndarray:
         if axis == 0:
@@ -1386,8 +1536,8 @@ def generate_visualization(
 
     for axis, name in view_specs:
         slices = _select_tumor_slices(proxy_prob, axis=axis, n_slices=8)
-        fig    = plt.figure(figsize=(22, 11), facecolor="#0a0a0a")
-        gs     = gridspec.GridSpec(4, 8, figure=fig, hspace=0.04, wspace=0.04)
+        fig = plt.figure(figsize=(22, 11), facecolor="#0a0a0a")
+        gs = gridspec.GridSpec(4, 8, figure=fig, hspace=0.04, wspace=0.04)
 
         for r, mod in enumerate(["T1", "T1c", "FLAIR", "Overlay"]):
             for c, sl in enumerate(slices):
@@ -1400,7 +1550,7 @@ def generate_visualization(
                         if s.max() > 0:
                             rgba = np.zeros((*s.shape, 4))
                             rgba[..., :3] = mcolors.to_rgb(comp_colors[comp_name])
-                            rgba[...,  3] = s * 0.65
+                            rgba[..., 3] = s * 0.65
                             ax.imshow(rgba)
                 else:
                     ax.imshow(get_slice(norm_vols[mod], axis, sl), cmap="gray", vmin=0, vmax=1)
@@ -1418,6 +1568,7 @@ def generate_visualization(
 # Uncertainty Summarisation
 # =============================================================================
 
+
 def summarise_uncertainty(
     uncertainty: np.ndarray,
     seg_full: np.ndarray,
@@ -1432,14 +1583,14 @@ def summarise_uncertainty(
     tumour_vox = uncertainty[seg_full > 0]
     if tumour_vox.size == 0:
         return {
-            "mean_global":    float(uncertainty.mean()),
-            "mean_tumour":    None,
-            "p95_tumour":     None,
+            "mean_global": float(uncertainty.mean()),
+            "mean_tumour": None,
+            "p95_tumour": None,
         }
     return {
         "mean_global": round(float(uncertainty.mean()), 5),
         "mean_tumour": round(float(tumour_vox.mean()), 5),
-        "p95_tumour":  round(float(np.percentile(tumour_vox, 95)), 5),
+        "p95_tumour": round(float(np.percentile(tumour_vox, 95)), 5),
     }
 
 
@@ -1462,6 +1613,7 @@ def flag_high_uncertainty_regions(
 # Multi-Focal Detection
 # =============================================================================
 
+
 def detect_multifocal(
     seg_full: np.ndarray,
     vox_vol_cc: float,
@@ -1480,11 +1632,9 @@ def detect_multifocal(
     if n_comp <= 1:
         return False, n_comp
 
-    min_vox   = max(1, int(min_satellite_cc / vox_vol_cc))
+    min_vox = max(1, int(min_satellite_cc / vox_vol_cc))
     valid_foci = sum(
-        1
-        for i in range(1, n_comp + 1)
-        if int(ndi.sum((seg_full > 0).astype(np.uint8), labeled, i)) >= min_vox
+        1 for i in range(1, n_comp + 1) if int(ndi.sum((seg_full > 0).astype(np.uint8), labeled, i)) >= min_vox
     )
     return valid_foci >= 2, valid_foci
 
@@ -1496,19 +1646,20 @@ def compute_dice_from_probs(prob_a: np.ndarray, prob_b: np.ndarray, threshold: f
     """
     mask_a = (prob_a > threshold).astype(np.float32)
     mask_b = (prob_b > threshold).astype(np.float32)
-    
+
     intersection = np.sum(mask_a * mask_b)
     union = np.sum(mask_a) + np.sum(mask_b)
-    
+
     if union < 1e-6:
         return 1.0 if intersection < 1e-6 else 0.0
-    
+
     return float(2.0 * intersection / union)
 
 
 # =============================================================================
 # Debug Visualization
 # =============================================================================
+
 
 def generate_debug_visualization(
     output_dir: Path,
@@ -1518,29 +1669,30 @@ def generate_debug_visualization(
 ) -> None:
     """
     Generate structured debug visualization of pipeline outputs.
-    
+
     Creates a 2x2 figure showing:
     - FLAIR reference image
     - FLAIR + segmentation overlay
     - MC-Dropout uncertainty map
     - Mean probability map
-    
+
     Only runs if MC-Dropout outputs are available.
     """
     logger = get_logger("pybrain")
-    
+
     # Check if MC-Dropout data available
     if not mc_uncertainties or "segresnet_mean_prob" not in mc_uncertainties:
         logger.debug("Debug visualization skipped: MC-Dropout data not available")
         return
-    
+
     try:
         import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
+
+        matplotlib.use("Agg")  # Non-interactive backend
         import matplotlib.pyplot as plt
         from matplotlib.patches import Patch
         from skimage import measure
-        
+
         # Find FLAIR volume
         flair = None
         if volumes and "FLAIR" in volumes:
@@ -1548,30 +1700,30 @@ def generate_debug_visualization(
         elif volumes:
             # Try to find any volume as reference
             flair = next(iter(volumes.values()))
-        
+
         if flair is None:
             logger.debug("Debug visualization skipped: No reference volume available")
             return
-        
+
         # Get MC-Dropout data
         mean_prob = mc_uncertainties["segresnet_mean_prob"]  # Shape: (3, H, W, D)
         uncertainty = mc_uncertainties.get("segresnet", None)  # Shape: (3, H, W, D)
-        
+
         # Find central slice with tumor
         tumor_mask = seg_full > 0
         tumor_per_slice = tumor_mask.sum(axis=(0, 1))
         center_z = int(np.argmax(tumor_per_slice))
-        
+
         # Extract slices
         flair_slice = flair[:, :, center_z]
         seg_slice = seg_full[:, :, center_z]
-        
+
         # Process mean prob (WT channel = index 1)
         if mean_prob.ndim == 4 and mean_prob.shape[0] == 3:
             prob_slice = mean_prob[1, :, :, center_z]
         else:
             prob_slice = mean_prob[:, :, center_z]
-        
+
         # Process uncertainty (mean across channels)
         if uncertainty is not None and uncertainty.ndim == 4 and uncertainty.shape[0] == 3:
             unc_slice = uncertainty[:, :, :, center_z].mean(axis=0)
@@ -1579,87 +1731,82 @@ def generate_debug_visualization(
             unc_slice = uncertainty[:, :, center_z]
         else:
             unc_slice = np.zeros_like(flair_slice)
-        
+
         # Create figure
         fig, axes = plt.subplots(2, 2, figsize=(14, 12))
-        fig.suptitle(f'DEBUG VISUAL - Slice Z={center_z}', fontsize=14, fontweight='bold')
-        
+        fig.suptitle(f"DEBUG VISUAL - Slice Z={center_z}", fontsize=14, fontweight="bold")
+
         # (a) FLAIR
         ax = axes[0, 0]
         vmax = np.percentile(flair, 99)
-        ax.imshow(flair_slice.T, cmap='gray', origin='lower', vmin=0, vmax=vmax)
-        ax.set_title('(a) FLAIR Reference', fontsize=11, fontweight='bold')
-        ax.axis('off')
-        
+        ax.imshow(flair_slice.T, cmap="gray", origin="lower", vmin=0, vmax=vmax)
+        ax.set_title("(a) FLAIR Reference", fontsize=11, fontweight="bold")
+        ax.axis("off")
+
         # (b) FLAIR + Segmentation overlay
         ax = axes[0, 1]
-        ax.imshow(flair_slice.T, cmap='gray', origin='lower', vmin=0, vmax=vmax)
-        
+        ax.imshow(flair_slice.T, cmap="gray", origin="lower", vmin=0, vmax=vmax)
+
         # Create RGB overlay
         seg_rgb = np.zeros((*seg_slice.T.shape, 4))
-        seg_rgb[seg_slice.T == 2] = [0, 1, 0, 0.4]      # Edema = Green
-        seg_rgb[seg_slice.T == 1] = [0, 0, 1, 0.5]      # Necrotic = Blue
-        seg_rgb[seg_slice.T == 4] = [1, 0, 0, 0.6]      # Enhancing = Red
-        ax.imshow(seg_rgb, origin='lower', interpolation='nearest')
-        
-        ax.set_title('(b) FLAIR + Segmentation\nG=Edema, B=Necrotic, R=Enhancing', 
-                     fontsize=11, fontweight='bold')
-        ax.axis('off')
-        
+        seg_rgb[seg_slice.T == 2] = [0, 1, 0, 0.4]  # Edema = Green
+        seg_rgb[seg_slice.T == 1] = [0, 0, 1, 0.5]  # Necrotic = Blue
+        seg_rgb[seg_slice.T == 4] = [1, 0, 0, 0.6]  # Enhancing = Red
+        ax.imshow(seg_rgb, origin="lower", interpolation="nearest")
+
+        ax.set_title("(b) FLAIR + Segmentation\nG=Edema, B=Necrotic, R=Enhancing", fontsize=11, fontweight="bold")
+        ax.axis("off")
+
         legend_elements = [
-            Patch(facecolor='green', alpha=0.4, label='Edema (2)'),
-            Patch(facecolor='blue', alpha=0.5, label='Necrotic (1)'),
-            Patch(facecolor='red', alpha=0.6, label='Enhancing (4)')
+            Patch(facecolor="green", alpha=0.4, label="Edema (2)"),
+            Patch(facecolor="blue", alpha=0.5, label="Necrotic (1)"),
+            Patch(facecolor="red", alpha=0.6, label="Enhancing (4)"),
         ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=8)
-        
+        ax.legend(handles=legend_elements, loc="upper right", fontsize=8)
+
         # (c) Uncertainty map
         ax = axes[1, 0]
-        im = ax.imshow(unc_slice.T, cmap='hot', origin='lower', interpolation='nearest')
-        ax.set_title('(c) MC-Dropout Uncertainty\n(Hot = High Uncertainty)', 
-                     fontsize=11, fontweight='bold')
-        ax.axis('off')
+        im = ax.imshow(unc_slice.T, cmap="hot", origin="lower", interpolation="nearest")
+        ax.set_title("(c) MC-Dropout Uncertainty\n(Hot = High Uncertainty)", fontsize=11, fontweight="bold")
+        ax.axis("off")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        
+
         # Add tumor contour
         contours = measure.find_contours(seg_slice.T > 0, 0.5)
         for contour in contours:
-            ax.plot(contour[:, 1], contour[:, 0], 'cyan', linewidth=1.5, alpha=0.7)
-        
+            ax.plot(contour[:, 1], contour[:, 0], "cyan", linewidth=1.5, alpha=0.7)
+
         # (d) Mean probability
         ax = axes[1, 1]
-        im = ax.imshow(prob_slice.T, cmap='viridis', origin='lower', 
-                       interpolation='nearest', vmin=0, vmax=1)
-        ax.set_title('(d) Mean Probability (WT)', 
-                     fontsize=11, fontweight='bold')
-        ax.axis('off')
+        im = ax.imshow(prob_slice.T, cmap="viridis", origin="lower", interpolation="nearest", vmin=0, vmax=1)
+        ax.set_title("(d) Mean Probability (WT)", fontsize=11, fontweight="bold")
+        ax.axis("off")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        
+
         # Add threshold contour
         prob_contours = measure.find_contours(prob_slice.T, 0.5)
         for contour in prob_contours:
-            ax.plot(contour[:, 1], contour[:, 0], 'white', 
-                   linewidth=1.5, linestyle='--', alpha=0.8)
-        
+            ax.plot(contour[:, 1], contour[:, 0], "white", linewidth=1.5, linestyle="--", alpha=0.8)
+
         plt.tight_layout()
-        
+
         # Save figure
         output_path = output_dir / "debug_visualization.png"
-        plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="white")
         plt.close(fig)
-        
+
         # Compute statistics
         unc_in = unc_slice[seg_slice > 0]
         unc_out = unc_slice[seg_slice == 0]
         ratio = unc_in.mean() / (unc_out.mean() + 1e-8)
-        
+
         prob_in = prob_slice[seg_slice > 0]
         prob_out = prob_slice[seg_slice == 0]
-        
+
         logger.info(f"Debug visualization saved: {output_path}")
         logger.info(f"  Uncertainty ratio (tumor/brain): {ratio:.1f}x")
         logger.info(f"  Mean prob in tumor: {prob_in.mean():.3f}, outside: {prob_out.mean():.3f}")
-        
+
     except Exception as exc:
         logger.warning(f"Debug visualization failed: {exc} — continuing pipeline")
 
@@ -1667,6 +1814,7 @@ def generate_debug_visualization(
 # =============================================================================
 # Output Saving
 # =============================================================================
+
 
 def save_all_outputs(
     seg_full: np.ndarray,
@@ -1684,7 +1832,7 @@ def save_all_outputs(
     volumes: Optional[Dict[str, np.ndarray]] = None,
 ) -> None:
     """Save NIfTI segmentations, probability maps, and JSON reports."""
-    logger     = get_logger("pybrain")
+    logger = get_logger("pybrain")
     output_dir = config.output_dir
 
     for p in output_dir.glob("segmentation_*.nii.gz"):
@@ -1694,39 +1842,25 @@ def save_all_outputs(
             logger.warning(f"Could not delete stale file {p}: {exc}")
 
     logger.debug(f"Saving segmentation shape: {seg_full.shape}")
-    save_nifti(seg_full,                   output_dir / "segmentation_ensemble.nii.gz", ref_img)
-    save_nifti(seg_full,                   output_dir / "segmentation_full.nii.gz",     ref_img)
-    save_nifti(seg_components["necrotic"], output_dir / "seg_necrotic.nii.gz",          ref_img)
-    save_nifti(seg_components["edema"],    output_dir / "seg_edema.nii.gz",             ref_img)
-    save_nifti(seg_components["enhancing"],output_dir / "seg_enhancing.nii.gz",         ref_img)
-    
+    save_nifti(seg_full, output_dir / "segmentation_ensemble.nii.gz", ref_img)
+    save_nifti(seg_full, output_dir / "segmentation_full.nii.gz", ref_img)
+    save_nifti(seg_components["necrotic"], output_dir / "seg_necrotic.nii.gz", ref_img)
+    save_nifti(seg_components["edema"], output_dir / "seg_edema.nii.gz", ref_img)
+    save_nifti(seg_components["enhancing"], output_dir / "seg_enhancing.nii.gz", ref_img)
+
     # Save ensemble probabilities and uncertainty
-    save_nifti(
-        ensemble_prob,
-        output_dir / "ensemble_probability.nii.gz",
-        ref_img
-    )
-    save_nifti(
-        uncertainty,
-        output_dir / "ensemble_uncertainty.nii.gz",
-        ref_img
-    )
-    
+    save_nifti(ensemble_prob, output_dir / "ensemble_probability.nii.gz", ref_img)
+    save_nifti(uncertainty, output_dir / "ensemble_uncertainty.nii.gz", ref_img)
+
     # Save MC-Dropout uncertainty maps (if available)
     if mc_uncertainties:
         logger.info("Saving MC-Dropout uncertainty maps...")
         if "segresnet" in mc_uncertainties:
-            save_nifti(
-                mc_uncertainties["segresnet"],
-                output_dir / "mc_dropout_segresnet_uncertainty.nii.gz",
-                ref_img
-            )
+            save_nifti(mc_uncertainties["segresnet"], output_dir / "mc_dropout_segresnet_uncertainty.nii.gz", ref_img)
             logger.info(f"  MC-Dropout uncertainty saved: mean={mc_uncertainties['segresnet'].mean():.4f}")
         if "segresnet_mean_prob" in mc_uncertainties:
             save_nifti(
-                mc_uncertainties["segresnet_mean_prob"],
-                output_dir / "mc_dropout_segresnet_mean_prob.nii.gz",
-                ref_img
+                mc_uncertainties["segresnet_mean_prob"], output_dir / "mc_dropout_segresnet_mean_prob.nii.gz", ref_img
             )
             # Log comparison with standard prediction
             standard_prob = model_probs_list[0] if model_probs_list else None
@@ -1738,17 +1872,17 @@ def save_all_outputs(
     stats = {
         "segmentation_source": "ensemble",
         "volume_cc": {
-            "brain":       quality_report["brain_vol_cc"],
+            "brain": quality_report["brain_vol_cc"],
             "whole_tumor": quality_report["v_wt_cc"],
-            "core":        quality_report["v_tc_cc"],
-            "enhancing":   quality_report["v_et_cc"],
-            "necrotic":    quality_report["v_nc_cc"],
-            "edema":       quality_report["v_ed_cc"],
+            "core": quality_report["v_tc_cc"],
+            "enhancing": quality_report["v_et_cc"],
+            "necrotic": quality_report["v_nc_cc"],
+            "edema": quality_report["v_ed_cc"],
         },
         "calibrated_volume_cc": quality_report.get("calibrated", {}),
         "tumor_pct_brain": quality_report["tumor_pct_brain"],
-        "thresholds":       applied_thresholds or config.thresholds,
-        "vox_vol_cc":       quality_report["vox_vol_cc"],
+        "thresholds": applied_thresholds or config.thresholds,
+        "vox_vol_cc": quality_report["vox_vol_cc"],
     }
     with open(output_dir / "tumor_stats.json", "w") as f:
         json.dump(stats, f, indent=2)
@@ -1756,25 +1890,23 @@ def save_all_outputs(
     with open(output_dir / "segmentation_quality.json", "w") as f:
         json.dump(
             {
-                "patient":              quality_report.get("patient", "unknown"),
-                "exam_date":            quality_report.get("exam_date", ""),
-                "engine":               "pybrain v3.0",
-                "quality":              quality_report,
-                "tumour_inside_brain":  not bool(
-                    np.any((seg_full > 0) & (brain_mask == 0))
-                ),
-                "uncertainty_summary":  quality_report.get("uncertainty_summary", {}),
-                "high_uncertainty_flag":quality_report.get("high_uncertainty_flag", False),
-                "multifocal":           quality_report.get("multifocal", False),
-                "n_foci":               quality_report.get("n_foci", 1),
-                "longitudinal_delta_cc":quality_report.get("longitudinal_delta_cc", {}),
-                "registration_nmi":     quality_report.get("registration_nmi", {}),
+                "patient": quality_report.get("patient", "unknown"),
+                "exam_date": quality_report.get("exam_date", ""),
+                "engine": "pybrain v3.0",
+                "quality": quality_report,
+                "tumour_inside_brain": not bool(np.any((seg_full > 0) & (brain_mask == 0))),
+                "uncertainty_summary": quality_report.get("uncertainty_summary", {}),
+                "high_uncertainty_flag": quality_report.get("high_uncertainty_flag", False),
+                "multifocal": quality_report.get("multifocal", False),
+                "n_foci": quality_report.get("n_foci", 1),
+                "longitudinal_delta_cc": quality_report.get("longitudinal_delta_cc", {}),
+                "registration_nmi": quality_report.get("registration_nmi", {}),
                 "roi_localisation_failed": quality_report.get("roi_localisation_failed", False),
             },
             f,
             indent=2,
         )
-        
+
         # ── Generate debug visualization (if MC-Dropout available) ─────────────
         generate_debug_visualization(
             output_dir=output_dir,
@@ -1787,6 +1919,7 @@ def save_all_outputs(
 # =============================================================================
 # Main Pipeline
 # =============================================================================
+
 
 def main() -> None:
     logger = setup_logging()
@@ -1805,14 +1938,10 @@ def main() -> None:
 
         # Extract true voxel spacing for anisotropic distance transforms [FIX-3]
         zooms = ref_img.header.get_zooms()[:3]
-        voxel_spacing: Tuple[float, float, float] = (
-            float(zooms[0]), float(zooms[1]), float(zooms[2])
-        )
+        voxel_spacing: Tuple[float, float, float] = (float(zooms[0]), float(zooms[1]), float(zooms[2]))
         config.voxel_spacing = voxel_spacing
         vox_vol_cc = float(np.prod(zooms)) / 1000.0
-        logger.info(
-            f"Voxel spacing: {voxel_spacing} mm | Voxel volume: {vox_vol_cc:.6f} cc"
-        )
+        logger.info(f"Voxel spacing: {voxel_spacing} mm | Voxel volume: {vox_vol_cc:.6f} cc")
 
         # ── Stage 1b registration warning passthrough ─────────────────────────
         reg_flag_path = config.monai_dir / "registration_warnings.json"
@@ -1822,16 +1951,13 @@ def main() -> None:
                     reg_info = json.load(f)
                 failed = reg_info.get("failed_sequences", [])
                 if failed:
-                    logger.warning(
-                        f"⚠️  Stage 1b registration warning: "
-                        f"{', '.join(failed)} may be mis-aligned."
-                    )
+                    logger.warning(f"⚠️  Stage 1b registration warning: {', '.join(failed)} may be mis-aligned.")
             except (json.JSONDecodeError, KeyError):
                 pass
 
         # ── [FIX-2] NMI quality assurance across all MRI sequence pairs ───────
         logger.info("Running MRI registration QA (all sequence pairs)...")
-        nmi_cfg     = config.models.get("registration_qc", {})
+        nmi_cfg = config.models.get("registration_qc", {})
         nmi_threshold = nmi_cfg.get("nmi_threshold", 1.05)
         registration_nmi = validate_all_registrations(volumes, nmi_threshold)
 
@@ -1842,8 +1968,21 @@ def main() -> None:
             logger.info("Using pre-computed brain mask from Stage 1b.")
             brain_mask = nib.load(str(mask_path)).get_fdata()  # type: ignore[attr-defined]
         else:
-            logger.info("Computing multi-contrast brain mask...")
-            brain_mask = robust_brain_mask(volumes, vox_vol_cc=vox_vol_cc)
+            logger.info("Computing brain mask from reference sequence (T1)...")
+            # Use only T1 (+ T1c if available) for mask — prevents oversized masks
+            # from mixed 2D/3D hospital data
+            mask_vols = {}
+            if "T1" in volumes:
+                mask_vols["T1"] = volumes["T1"]
+            if "T1c" in volumes:
+                mask_vols["T1c"] = volumes["T1c"]
+            if not mask_vols:
+                mask_vols = volumes  # fallback to all
+            logger.info(f"  Brain mask computed from: {list(mask_vols.keys())}")
+            brain_mask = robust_brain_mask(mask_vols, vox_vol_cc=vox_vol_cc)
+            brain_check_cc = float(brain_mask.sum() * vox_vol_cc)
+            if brain_check_cc < 900 or brain_check_cc > 1700:
+                logger.warning(f"  Brain mask {brain_check_cc:.0f} cc outside expected 900-1700 cc range.")
             if config.models.get("save_brain_mask", True):
                 save_nifti(brain_mask, config.output_dir / "brain_mask.nii.gz", ref_img)
 
@@ -1867,15 +2006,15 @@ def main() -> None:
         # ── Stage 3a: Fast ROI localisation (SegResNet pass 1) ───────────────
         logger.info("Stage 3a: ROI localisation (SegResNet)...")
         sr_model = load_segresnet(config.bundle_dir, config.model_device)
-        sr_prob  = run_segresnet_inference(
-            sr_model, input_tensor, config.device,
+        sr_prob = run_segresnet_inference(
+            sr_model,
+            input_tensor,
+            config.device,
             config.models.get("segresnet", {}),
             model_device=config.model_device,
         )
         roi_slices, orig_shape = get_tumor_bbox(sr_prob[1])
-        roi_localisation_failed = all(
-            isinstance(s, slice) and s.start is None for s in roi_slices
-        )
+        roi_localisation_failed = all(isinstance(s, slice) and s.start is None for s in roi_slices)
         if roi_localisation_failed:
             logger.warning(
                 "ROI localisation fallback: SegResNet found no tumour voxels above "
@@ -1902,10 +2041,11 @@ def main() -> None:
         gc.collect()
 
         results_roi, mc_uncertainties_roi = run_models(
-            roi_input, config,
+            roi_input,
+            config,
             precomputed={"segresnet": sr_prob_roi},
         )
-        
+
         # ── MC-Dropout uncertainty quantification (controlled pass) ─────────────
         # Runs separately from main inference to avoid affecting segmentation.
         # Only runs on SegResNet for speed, on the ROI crop.
@@ -1913,33 +2053,36 @@ def main() -> None:
         mc_config = config.models.get("mc_dropout", {})
         if mc_config.get("enabled", False) and "segresnet" in mc_config.get("models", []):
             from pybrain.models.mc_dropout import run_mc_dropout_inference
+
             n_samples_mc = min(mc_config.get("n_samples", 15), 15)  # Cap at 15
-            
+
             logger.info(f"Running MC-Dropout uncertainty quantification ({n_samples_mc} samples)...")
             mc_start = time.time()
-            
+
             # Load SegResNet fresh for MC-Dropout
             mc_model = load_segresnet(config.bundle_dir, config.model_device)
             sr_cfg = config.models.get("segresnet", {})
-            
+
             # Run on the same ROI input
             mean_prob_mc, std_prob_mc = run_mc_dropout_inference(
                 mc_model, roi_input, config.device, n_samples_mc, sr_cfg, config.model_device
             )
-            
+
             mc_elapsed = time.time() - mc_start
-            
+
             # Reassemble to full volume
             full_mc_unc = np.zeros((3,) + orig_shape, dtype=np.float32)
             full_mc_unc[:, roi_slices[0], roi_slices[1], roi_slices[2]] = std_prob_mc
             mc_uncertainties_full["segresnet"] = full_mc_unc
-            
+
             full_mc_mean = np.zeros((3,) + orig_shape, dtype=np.float32)
             full_mc_mean[:, roi_slices[0], roi_slices[1], roi_slices[2]] = mean_prob_mc
             mc_uncertainties_full["segresnet_mean_prob"] = full_mc_mean
-            
-            logger.info(f"MC-Dropout complete: runtime={mc_elapsed:.1f}s, mean_std={std_prob_mc.mean():.4f}, max_std={std_prob_mc.max():.4f}")
-            
+
+            logger.info(
+                f"MC-Dropout complete: runtime={mc_elapsed:.1f}s, mean_std={std_prob_mc.mean():.4f}, max_std={std_prob_mc.max():.4f}"
+            )
+
             cleanup_model_memory(mc_model, config.model_device)
             del mean_prob_mc, std_prob_mc
 
@@ -1949,7 +2092,7 @@ def main() -> None:
             full_prob = np.zeros((3,) + orig_shape, dtype=np.float32)
             full_prob[:, roi_slices[0], roi_slices[1], roi_slices[2]] = prob_roi
             model_probs[name] = full_prob
-        
+
         # Reassemble MC-Dropout uncertainties from run_models (if any)
         if mc_uncertainties_roi:
             for key, unc_roi in mc_uncertainties_roi.items():
@@ -1974,15 +2117,19 @@ def main() -> None:
         if ct_data is not None and config.ct_boost.get("enabled", False):
             # Create MRI data array for NMI validation (use T1c channel if available)
             mri_for_nmi = None
-            if 'T1c' in volumes:
-                mri_for_nmi = volumes['T1c']
-            elif 'FLAIR' in volumes:
-                mri_for_nmi = volumes['FLAIR']
-            
+            if "T1c" in volumes:
+                mri_for_nmi = volumes["T1c"]
+            elif "FLAIR" in volumes:
+                mri_for_nmi = volumes["FLAIR"]
+
             ensemble_prob = apply_ct_boost(
-                    ensemble_prob, ct_data, config,
-                    brain_mask=brain_mask, volumes=volumes, mri_data=mri_for_nmi,
-                )
+                ensemble_prob,
+                ct_data,
+                config,
+                brain_mask=brain_mask,
+                volumes=volumes,
+                mri_data=mri_for_nmi,
+            )
 
         # ── Platt calibration (pre-applied before threshold adaptation) ─────────
         # Applied here so that statistical threshold adaptation operates on
@@ -2010,13 +2157,16 @@ def main() -> None:
                 adaptive_threshold_from_uncertainty,
                 StatisticalThresholdOptimizer,
             )
+
             base_thresholds = {
-                'tc': config.thresholds.get('tc', 0.35),
-                'wt': config.thresholds.get('wt', 0.35),
-                'et': config.thresholds.get('et', 0.35),
+                "tc": config.thresholds.get("tc", 0.35),
+                "wt": config.thresholds.get("wt", 0.35),
+                "et": config.thresholds.get("et", 0.35),
             }
-            clinical_bounds = threshold_cfg.get('clinical_bounds') or {
-                'wt': (0.30, 0.70), 'tc': (0.25, 0.65), 'et': (0.20, 0.60)
+            clinical_bounds = threshold_cfg.get("clinical_bounds") or {
+                "wt": (0.30, 0.70),
+                "tc": (0.25, 0.65),
+                "et": (0.20, 0.60),
             }
             # Compute uncertainty now (needed for adaptation); will be reused below
             _prob_list_for_thresh = [model_probs[n] for n in contributed if n in model_probs]
@@ -2027,15 +2177,13 @@ def main() -> None:
             # Safety check: validate each adapted threshold stays in clinical bounds
             optimizer = StatisticalThresholdOptimizer(
                 clinical_bounds=clinical_bounds,
-                uncertainty_weight=threshold_cfg.get('uncertainty_weight', 0.1),
+                uncertainty_weight=threshold_cfg.get("uncertainty_weight", 0.1),
             )
-            safety = optimizer.validate_clinical_safety(
-                adapted, ensemble_prob, brain_mask, vox_vol_cc=vox_vol_cc
-            )
+            safety = optimizer.validate_clinical_safety(adapted, ensemble_prob, brain_mask, vox_vol_cc=vox_vol_cc)
             threshold_overrides = {}
-            for region in ['tc', 'wt', 'et']:
+            for region in ["tc", "wt", "et"]:
                 r = safety.get(region, {})
-                if isinstance(r, dict) and r.get('safe', False):
+                if isinstance(r, dict) and r.get("safe", False):
                     threshold_overrides[region] = adapted[region]
                     logger.info(f"  {region.upper()}: adapted={adapted[region]:.3f} ✓ safe")
                 else:
@@ -2048,18 +2196,22 @@ def main() -> None:
 
         # ── Post-processing ───────────────────────────────────────────────────
         seg_full, necrotic, edema, enhancing, applied_thresholds = postprocess_segmentation(
-            ensemble_prob, brain_mask, vox_vol_cc, config,
-            volumes=volumes, voxel_spacing=voxel_spacing,
+            ensemble_prob,
+            brain_mask,
+            vox_vol_cc,
+            config,
+            volumes=volumes,
+            voxel_spacing=voxel_spacing,
             threshold_overrides=threshold_overrides,
             skip_platt=True,  # Platt calibration already applied above (RC-4)
         )
 
         # ── Sub-region volumes ────────────────────────────────────────────────
         raw_volumes_cc: Dict[str, float] = {
-            "wt": compute_volume_cc(seg_full > 0,          vox_vol_cc),
+            "wt": compute_volume_cc(seg_full > 0, vox_vol_cc),
             "tc": compute_volume_cc((necrotic + enhancing) > 0, vox_vol_cc),
-            "et": compute_volume_cc(enhancing,             vox_vol_cc),
-            "nc": compute_volume_cc(necrotic,              vox_vol_cc),
+            "et": compute_volume_cc(enhancing, vox_vol_cc),
+            "nc": compute_volume_cc(necrotic, vox_vol_cc),
         }
         ed_vol = compute_volume_cc(edema, vox_vol_cc)
 
@@ -2073,19 +2225,18 @@ def main() -> None:
         save_current_volumes_as_prior(raw_volumes_cc, config)
 
         # ── Uncertainty ───────────────────────────────────────────────────────
-        prob_list   = [model_probs[n] for n in contributed if n in model_probs]
+        prob_list = [model_probs[n] for n in contributed if n in model_probs]
         model_probs_list = prob_list  # Store for later use in save_all_outputs
         uncertainty = compute_uncertainty(ensemble_prob, prob_list)
         del model_probs
         gc.collect()
         _gpu_cache_clear(config.model_device)
 
-        uncertainty_summary  = summarise_uncertainty(uncertainty, seg_full)
+        uncertainty_summary = summarise_uncertainty(uncertainty, seg_full)
         high_uncertainty_flag = flag_high_uncertainty_regions(uncertainty, seg_full)
         if high_uncertainty_flag:
             logger.warning(
-                "⚠️  High uncertainty detected in tumour region. "
-                "Radiologist review recommended before clinical use."
+                "⚠️  High uncertainty detected in tumour region. Radiologist review recommended before clinical use."
             )
 
         # ── [FIX-9] Multi-focal detection ─────────────────────────────────────
@@ -2098,43 +2249,85 @@ def main() -> None:
 
         # ── Quality report ────────────────────────────────────────────────────
         quality_report: Dict[str, Any] = {
-            "patient":              config.patient.get("name", "unknown"),
-            "exam_date":            config.patient.get("exam_date", ""),
-            "v_wt_cc":              raw_volumes_cc["wt"],
-            "v_tc_cc":              raw_volumes_cc["tc"],
-            "v_et_cc":              raw_volumes_cc["et"],
-            "v_nc_cc":              raw_volumes_cc["nc"],
-            "v_ed_cc":              ed_vol,
-            "brain_vol_cc":         brain_vol_cc,
-            "tumor_pct_brain":      100 * raw_volumes_cc["wt"] / (brain_vol_cc + 1e-8),
-            "vox_vol_cc":           vox_vol_cc,
-            "calibrated":           calibrated_volumes,
-            "longitudinal_delta_cc":longitudinal_delta,
-            "uncertainty_summary":  uncertainty_summary,
-            "high_uncertainty_flag":high_uncertainty_flag,
-            "multifocal":           is_multifocal,
-            "n_foci":               n_foci,
-            "registration_nmi":     registration_nmi,
+            "patient": config.patient.get("name", "unknown"),
+            "exam_date": config.patient.get("exam_date", ""),
+            "v_wt_cc": raw_volumes_cc["wt"],
+            "v_tc_cc": raw_volumes_cc["tc"],
+            "v_et_cc": raw_volumes_cc["et"],
+            "v_nc_cc": raw_volumes_cc["nc"],
+            "v_ed_cc": ed_vol,
+            "brain_vol_cc": brain_vol_cc,
+            "tumor_pct_brain": 100 * raw_volumes_cc["wt"] / (brain_vol_cc + 1e-8),
+            "vox_vol_cc": vox_vol_cc,
+            "calibrated": calibrated_volumes,
+            "longitudinal_delta_cc": longitudinal_delta,
+            "uncertainty_summary": uncertainty_summary,
+            "high_uncertainty_flag": high_uncertainty_flag,
+            "multifocal": is_multifocal,
+            "n_foci": n_foci,
+            "registration_nmi": registration_nmi,
             "roi_localisation_failed": roi_localisation_failed,
         }
+
+        # ── Non-GBM / zero-tumour detection ─────────────────────────────────
+        _zero_tumor = raw_volumes_cc["wt"] < 0.01
+        _model_failed = applied_thresholds and applied_thresholds.get("_model_non_activation", False)
+        quality_report["zero_tumor_volume"] = _zero_tumor
+        quality_report["model_non_activation"] = _model_failed
+
+        # CT calcification volume — used to detect non-GBM (meningioma etc.)
+        _ct_calc_cc = 0.0
+        _ct_calc_path = config.output_dir / "ct_calcification.nii.gz"
+        if _ct_calc_path.exists():
+            try:
+                calc_img = cast(nib.Nifti1Image, nib.load(str(_ct_calc_path), mmap=True))
+                _ct_data = calc_img.get_fdata()
+                zooms = calc_img.header.get_zooms()[:3]
+                _ct_vox_vol = np.prod(zooms)
+                _ct_calc_cc = float((_ct_data > 0).sum() * _ct_vox_vol / 1000)
+                logger.info(f"  CT calcification volume: {_ct_calc_cc:.1f} cc")
+            except Exception as exc:
+                logger.warning(f"  Could not read ct_calcification.nii.gz: {exc}")
+
+        quality_report["ct_calcification_cc"] = _ct_calc_cc
+        # Threshold configurable via config: segmentation.non_gbm_ct_calc_threshold_cc
+        # Default 200cc accounts for thick-slice hospital CT (25mm) which over-estimates volume
+        _ct_thresh = config.segmentation.get("non_gbm_ct_calc_threshold_cc", 200.0)
+        quality_report["non_glioblastoma_suspected"] = bool(_model_failed and _ct_calc_cc > _ct_thresh)
+
+        if quality_report["non_glioblastoma_suspected"]:
+            logger.info(
+                "  Non-glioblastoma suspected — "
+                f"model non-activation (max_prob < 0.10) with CT calcification {_ct_calc_cc:.1f} cc > {_ct_thresh:.0f}"
+            )
 
         # ── Visualizations ────────────────────────────────────────────────────
         logger.info("Generating visualizations...")
         seg_components = {"necrotic": necrotic, "edema": edema, "enhancing": enhancing}
         generate_visualization(
-            volumes, seg_components, config.output_dir, ref_img,
-            wt_prob=ensemble_prob[1],   # [FIX-6] pass prob map for tumour-aware slices
+            volumes,
+            seg_components,
+            config.output_dir,
+            ref_img,
+            wt_prob=ensemble_prob[1],  # [FIX-6] pass prob map for tumour-aware slices
         )
 
         # ── Save all outputs ──────────────────────────────────────────────────
         logger.info("Saving outputs...")
         save_all_outputs(
-            seg_full, seg_components, ensemble_prob, uncertainty,
-            brain_mask, ref_img, config, quality_report,
-            model_probs_list, voxel_spacing,
+            seg_full,
+            seg_components,
+            ensemble_prob,
+            uncertainty,
+            brain_mask,
+            ref_img,
+            config,
+            quality_report,
+            model_probs_list,
+            voxel_spacing,
             applied_thresholds=applied_thresholds,
             mc_uncertainties=mc_uncertainties_full if mc_uncertainties_full else None,
-            volumes=volumes
+            volumes=volumes,
         )
 
         # ── Optional ground-truth validation ──────────────────────────────────
@@ -2142,13 +2335,14 @@ def main() -> None:
         if gt_path and Path(gt_path).exists():
             logger.info("Ground truth found — evaluating segmentation...")
             val_script = Path(__file__).parent / "5_validate_segmentation.py"
-            pred_path  = config.output_dir / "segmentation_full.nii.gz"
+            pred_path = config.output_dir / "segmentation_full.nii.gz"
             if val_script.exists():
                 try:
                     result = subprocess.run(
-                        [sys.executable, str(val_script),
-                         "--pred", str(pred_path), "--gt", str(gt_path)],
-                        capture_output=True, text=True, timeout=300,
+                        [sys.executable, str(val_script), "--pred", str(pred_path), "--gt", str(gt_path)],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
                     )
                     for line in result.stdout.split("\n"):
                         if line.strip():

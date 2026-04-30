@@ -75,6 +75,48 @@ jobs:
       # so we skip it in CI. It works fine in local development.
       # - name: Smoke test - scripts module
 
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install monai nibabel SimpleITK pydicom numpy scipy scikit-image scikit-learn pandas pyyaml einops
+          pip install pytest pytest-cov pyyaml
+
+      - name: Run unit tests with coverage
+        run: |
+          python -m pytest tests/ \
+            -v --tb=short \
+            --cov=pybrain \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            -m "not slow and not gpu and not integration" \
+            --ignore=tests/regression_baseline.py
+
+      - name: Upload coverage to Codecov
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
   docs:
     name: Documentation Check
     runs-on: ubuntu-latest

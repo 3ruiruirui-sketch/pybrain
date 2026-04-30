@@ -5,13 +5,14 @@ WHO 2021 Clinical Classification Rules.
 
 from typing import List, Dict, Any
 
+
 def get_who_clinical_interpretation(metrics: Dict[str, Any]) -> List[str]:
     """
     Returns a list of clinical warnings/interpretations based on WHO 2021 criteria.
     Compatible with Stage 7/8/9 reports.
     """
     warnings = []
-    
+
     # 1. T2-FLAIR mismatch (Suggestive of IDH-mutant astrocytoma)
     # Assumes metrics contain a 'mismatch_sign' boolean or enough data to infer it.
     if metrics.get("t2_flair_mismatch_detected", False):
@@ -29,5 +30,5 @@ def get_who_clinical_interpretation(metrics: Dict[str, Any]) -> List[str]:
 
     if not warnings:
         warnings.append("✅ No high-risk WHO 2021 pathognomonic patterns detected.")
-        
+
     return warnings

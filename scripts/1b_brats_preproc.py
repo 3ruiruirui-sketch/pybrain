@@ -8,13 +8,11 @@ Applies LPS orientation (scanner-native, DICOM standard),
 
 import sys
 import json
-import os
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 import SimpleITK as sitk
-import shutil
 
 # ── Project root ──────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -22,9 +20,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from pybrain.io.session import get_session, get_paths
 from pybrain.core.brainmask import robust_brain_mask
-from pybrain.core.metrics import compute_volume_cc
 from pybrain.io.nifti_io import save_nifti
 from pybrain.io.logging_utils import setup_logging
+
 
 def reorient_resample(in_path, out_path, is_label=False):
     """Apply Orientation and Spacing via SimpleITK."""
@@ -37,10 +35,10 @@ def reorient_resample(in_path, out_path, is_label=False):
     # equal timestamps mean the output was produced at the same second as the input,
     # not that the input is older than the output.
     if out_path.exists() and out_path.stat().st_size > 10_000:
-        m_in  = in_path.stat().st_mtime
+        m_in = in_path.stat().st_mtime
         m_out = out_path.stat().st_mtime
         if m_out > m_in:
-            return out_path   # output is genuinely newer — skip
+            return out_path  # output is genuinely newer — skip
 
     itk_img = sitk.ReadImage(str(in_path))
 
@@ -54,7 +52,7 @@ def reorient_resample(in_path, out_path, is_label=False):
             extract.SetIndex([0, 0, 0, 0])
             itk_img = extract.Execute(itk_img)
         else:
-            itk_img = itk_img[:,:,:,0]
+            itk_img = itk_img[:, :, :, 0]
 
     # 2. Reorient to LPS — DICOM standard, corresponds directly to NIfTI LAS
     #     scanner-native (affine diagonal stays [-1,-1,+1]), no rotation artifacts.
@@ -67,13 +65,10 @@ def reorient_resample(in_path, out_path, is_label=False):
 
     # 3. Resample to 1 mm isotropic
     original_spacing = itk_img.GetSpacing()
-    original_size   = itk_img.GetSize()
+    original_size = itk_img.GetSize()
 
     new_spacing = (1.0, 1.0, 1.0)
-    new_size = [
-        int(round(original_size[i] * (original_spacing[i] / new_spacing[i])))
-        for i in range(3)
-    ]
+    new_size = [int(round(original_size[i] * (original_spacing[i] / new_spacing[i]))) for i in range(3)]
 
     resampler = sitk.ResampleImageFilter()
     resampler.SetOutputSpacing(new_spacing)
@@ -90,6 +85,7 @@ def reorient_resample(in_path, out_path, is_label=False):
     sitk.WriteImage(resampled, str(out_path))
     return out_path
 
+
 def register_to_reference(ref_path, moving_path, out_path):
     """Rigid registration of moving to ref. Returns None on failure."""
     if not ref_path.exists() or not moving_path.exists():
@@ -101,13 +97,12 @@ def register_to_reference(ref_path, moving_path, out_path):
             return out_path
 
     try:
-        ref    = sitk.ReadImage(str(ref_path), sitk.sitkFloat32)
+        ref = sitk.ReadImage(str(ref_path), sitk.sitkFloat32)
         moving = sitk.ReadImage(str(moving_path), sitk.sitkFloat32)
 
         # Initialize transform (Center-based)
         initial_transform = sitk.CenteredTransformInitializer(
-            ref, moving, sitk.Euler3DTransform(),
-            sitk.CenteredTransformInitializerFilter.GEOMETRY
+            ref, moving, sitk.Euler3DTransform(), sitk.CenteredTransformInitializerFilter.GEOMETRY
         )
 
         # Registration framework
@@ -130,16 +125,17 @@ def register_to_reference(ref_path, moving_path, out_path):
         print(f"  ⚠️ Registration failed for {moving_path.name}: {e}")
         return None
 
+
 def main():
     logger = setup_logging()
     logger.info("Starting Stage 1b: BraTS Pre-processing (LPS + Registration + Masking)")
-    
+
     sess = get_session()
     paths = get_paths(sess)
     monai_dir = Path(paths["monai_dir"])
-    
+
     sequences = ["t1", "t1c", "t2", "flair"]
-    
+
     # 1. Independent Reorient and Resample (to 1mm grid)
     logger.info("Step 1: SimpleITK LPS Reorientation & 1mm Resampling")
     resampled_paths = {}
@@ -151,16 +147,52 @@ def main():
             resampled_paths[seq.upper()] = out_path
             logger.info(f"  Resampled {seq} -> {out_path.name}")
 
-    # 2. Inter-modal Registration (Align T1, T2, FLAIR to T1c)
+    # Log geometry of all input sequences for debugging
+    logger.info("Input sequence geometries:")
+    for seq, p in resampled_paths.items():
+        try:
+            _img = sitk.ReadImage(str(p))
+            _size = _img.GetSize()
+            _spacing = _img.GetSpacing()
+            _tag = "3D" if _size[2] >= 100 else "2D thin"
+            logger.info(
+                f"  {seq:6s}: {_size[0]}x{_size[1]}x{_size[2]} "
+                f"spacing={_spacing[0]:.1f}x{_spacing[1]:.1f}x{_spacing[2]:.1f}mm "
+                f"{'3D' if _size[2] >= 100 else '2D thin'}"
+            )
+        except Exception:
+            logger.info(f"  {seq:6s}: (could not read geometry)")
+
+    # 2. Inter-modal Registration — prefer T1 MPRAGE (3D isotropic)
+    # Hospital T1c is often a thin 2D acquisition (24-26 slices).
+    # T1 MPRAGE provides the best geometry for registration target.
+    # Priority: t1 (if it has most slices) > t1c > flair > t2
     logger.info("Step 2: Inter-modal Registration (Alignment)")
-    ref_seq = "T1C" if "T1C" in resampled_paths else "T1"
+
+    def _count_slices(path):
+        try:
+            _itk = sitk.ReadImage(str(path))
+            return _itk.GetSize()[2]
+        except Exception:
+            return 0
+
+    # Pick sequence with most slices as reference (= best 3D coverage)
+    if resampled_paths:
+        ref_seq = max(resampled_paths.keys(), key=lambda s: _count_slices(resampled_paths[s]))
+        # If T1 has >= 100 slices, always prefer it (it's the MPRAGE)
+        if "T1" in resampled_paths and _count_slices(resampled_paths["T1"]) >= 100:
+            ref_seq = "T1"
+    else:
+        ref_seq = "T1C" if "T1C" in resampled_paths else "T1"
+
     ref_path = resampled_paths[ref_seq]
-    logger.info(f"  Reference sequence: {ref_seq}")
+    logger.info(f"  Registration reference: {ref_seq} ({_count_slices(ref_path)} slices)")
 
     registered_paths = {ref_seq: ref_path}
     registration_failures = []
     for seq, p in resampled_paths.items():
-        if seq == ref_seq: continue
+        if seq == ref_seq:
+            continue
         out_path = monai_dir / f"{seq.lower()}_registered.nii.gz"
         logger.info(f"  Registering {seq} to {ref_seq}...")
         res = register_to_reference(ref_path, p, out_path)
@@ -174,18 +206,24 @@ def main():
     # Propagate registration status to session metadata for downstream stages
     if registration_failures:
         fail_str = ", ".join(registration_failures)
-        logger.warning(f"  ⚠️ Alignment compromised — downstream stages notified.")
+        logger.warning("  ⚠️ Alignment compromised — downstream stages notified.")
         # Write a flag file that downstream stages can check
         flag_path = monai_dir / "registration_warnings.json"
         with open(flag_path, "w") as f:
-            json.dump({
-                "registration_failed": True,
-                "failed_sequences": registration_failures,
-                "note": f"{fail_str} used non-registered resampled volumes. Volumes may be misaligned."
-            }, f, indent=2)
+            json.dump(
+                {
+                    "registration_failed": True,
+                    "failed_sequences": registration_failures,
+                    "note": f"{fail_str} used non-registered resampled volumes. Volumes may be misaligned.",
+                },
+                f,
+                indent=2,
+            )
 
-    # 3. Multi-Contrast Brain Masking (on Aligned Data)
-    logger.info("Step 3: Multi-Contrast Brain Masking on Aligned Stack")
+    # 3. Brain Masking — compute from reference sequence only
+    # For mixed 2D/3D hospital data, using only the 3D reference prevents
+    # oversized masks from thin 2D sequences (e.g. 2640cc vs correct ~1300cc).
+    logger.info("Step 3: Brain Masking from Reference Sequence")
     volumes = {}
     ref_img = None
     for seq, p in registered_paths.items():
@@ -193,14 +231,30 @@ def main():
         volumes[seq] = img.get_fdata()
         if ref_img is None:
             ref_img = img
-            
+
     # Calculate voxel volume for cc conversion
     pixdim = ref_img.header.get_zooms()
     vox_vol_cc = (pixdim[0] * pixdim[1] * pixdim[2]) / 1000.0
-    
-    mask = robust_brain_mask(volumes, vox_vol_cc=vox_vol_cc)
-    logger.info(f"  Brain volume: {mask.sum() * vox_vol_cc:.1f} cc")
-    
+
+    # Use only reference sequence for mask (most reliable geometry)
+    # Also add T1c if available (helps with contrast-enhancing tumour)
+    mask_volumes = {ref_seq: volumes[ref_seq]}
+    t1c_key = next((k for k in volumes if k.upper() == "T1C"), None)
+    if t1c_key and t1c_key != ref_seq:
+        mask_volumes[t1c_key] = volumes[t1c_key]
+    logger.info(f"  Brain mask computed from: {list(mask_volumes.keys())}")
+
+    mask = robust_brain_mask(mask_volumes, vox_vol_cc=vox_vol_cc)
+    brain_vol_cc = float(mask.sum() * vox_vol_cc)
+    logger.info(f"  Brain volume: {brain_vol_cc:.1f} cc")
+
+    # Sanity check — expected adult brain 900-1700 cc
+    if brain_vol_cc < 900 or brain_vol_cc > 1700:
+        logger.warning(
+            f"  Brain mask volume {brain_vol_cc:.0f} cc is outside expected range "
+            f"(900-1700 cc). Check skull-stripping quality."
+        )
+
     # Save the mask
     mask_path = monai_dir / "brain_mask.nii.gz"
     save_nifti(mask, mask_path, ref_img)
@@ -216,6 +270,7 @@ def main():
         logger.info(f"  Final BraTS Volume: {out_p.name}")
 
     logger.info("Stage 1b completed successfully.")
+
 
 if __name__ == "__main__":
     main()

@@ -17,7 +17,6 @@ import time
 # ─────────────────────────────────────────────────────────────────────────
 # ⚙️  PATHS
 # ─────────────────────────────────────────────────────────────────────────
-import sys as _sys
 import json
 from pathlib import Path
 
@@ -41,9 +40,10 @@ else:
         print("ERROR: Could not find session.json in results/")
         _sess = {}
 
-MRI_DIR     = _sess.get("monai_dir", "")
-EXTRA_DIR   = _sess.get("extra_dir", "")
+MRI_DIR = _sess.get("monai_dir", "")
+EXTRA_DIR = _sess.get("extra_dir", "")
 RESULTS_DIR = _sess.get("output_dir", "")
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -54,6 +54,7 @@ def ui_update(label="", pause=0.3):
         time.sleep(pause)
     if label:
         print(f"  OK  {label}")
+
 
 def safe_load_volume(path, name):
     if not os.path.exists(path):
@@ -68,6 +69,7 @@ def safe_load_volume(path, name):
         print(f"  !!  {name} load error: {e}")
         return None
 
+
 def safe_load_seg(path, name):
     if not os.path.exists(path):
         print(f"  --  Skip {name} (not found)")
@@ -80,6 +82,7 @@ def safe_load_seg(path, name):
     except Exception as e:
         print(f"  !!  {name} load error: {e}")
         return None
+
 
 # ─────────────────────────────────────────────────────────────────────────
 print("=" * 55)
@@ -98,10 +101,10 @@ except Exception as e:
 print("\n[2/6] Loading MRI volumes...")
 volumes = {}
 mri_list = [
-    ("t1c",   MRI_DIR + "/t1c_resampled.nii.gz", "T1c"),
-    ("t1",    MRI_DIR + "/t1.nii.gz",             "T1"),
-    ("flair", MRI_DIR + "/flair_resampled.nii.gz","FLAIR"),
-    ("t2",    MRI_DIR + "/t2_resampled.nii.gz",   "T2"),
+    ("t1c", MRI_DIR + "/t1c_resampled.nii.gz", "T1c"),
+    ("t1", MRI_DIR + "/t1.nii.gz", "T1"),
+    ("flair", MRI_DIR + "/flair_resampled.nii.gz", "FLAIR"),
+    ("t2", MRI_DIR + "/t2_resampled.nii.gz", "T2"),
 ]
 for key, path, label in mri_list:
     node = safe_load_volume(path, label)
@@ -111,9 +114,9 @@ for key, path, label in mri_list:
 # ── BLOCK 3 — Load CT ─────────────────────────────────────────────────
 print("\n[3/6] Loading CT (if available)...")
 ct_files = {
-    "CT":       "ct_brain_registered.nii.gz",
-    "CT_Calc":  "ct_calcification.nii.gz",
-    "CT_Haem":  "ct_haemorrhage.nii.gz"
+    "CT": "ct_brain_registered.nii.gz",
+    "CT_Calc": "ct_calcification.nii.gz",
+    "CT_Haem": "ct_haemorrhage.nii.gz",
 }
 for key, fname in ct_files.items():
     path = os.path.join(RESULTS_DIR, fname)
@@ -124,26 +127,28 @@ for key, fname in ct_files.items():
 # ── BLOCK 4 — Load segmentation ───────────────────────────────────────
 print("\n[4/6] Loading segmentation...")
 seg_merged = RESULTS_DIR + "/segmentation_ct_merged.nii.gz"
-seg_brats  = RESULTS_DIR + "/segmentation_full.nii.gz"
-seg_path   = seg_merged if os.path.exists(seg_merged) else seg_brats
-seg_label  = "BraTS+CT" if os.path.exists(seg_merged) else "BraTS"
+seg_brats = RESULTS_DIR + "/segmentation_full.nii.gz"
+seg_path = seg_merged if os.path.exists(seg_merged) else seg_brats
+seg_label = "BraTS+CT" if os.path.exists(seg_merged) else "BraTS"
 print(f"  Using: {os.path.basename(seg_path)}")
 
 seg_node = safe_load_seg(seg_path, seg_label)
 
 if seg_node:
     try:
-        seg  = seg_node.GetSegmentation()
-        cfg  = {"1":("Necrotic",   [0.27,0.53,1.00]),
-                "2":("Edema",      [0.27,0.87,0.27]),
-                "3":("Enhancing",  [1.00,0.27,0.27])}
+        seg = seg_node.GetSegmentation()
+        cfg = {
+            "1": ("Necrotic", [0.27, 0.53, 1.00]),
+            "2": ("Edema", [0.27, 0.87, 0.27]),
+            "3": ("Enhancing", [1.00, 0.27, 0.27]),
+        }
         for i in range(seg.GetNumberOfSegments()):
             sid = seg.GetNthSegmentID(i)
-            s   = seg.GetSegment(sid)
-            for lv,(nm,col) in cfg.items():
+            s = seg.GetSegment(sid)
+            for lv, (nm, col) in cfg.items():
                 if lv in s.GetName():
                     s.SetName(nm)
-                    s.SetColor(col[0],col[1],col[2])
+                    s.SetColor(col[0], col[1], col[2])
                     print(f"  Label {lv} -> {nm}")
                     break
         dn = seg_node.GetDisplayNode()
@@ -159,12 +164,10 @@ if seg_node:
 print("\n[5/6] Setting layout...")
 try:
     lm = slicer.app.layoutManager()
-    lm.setLayout(3)           # built-in Four-Up — safest option
+    lm.setLayout(3)  # built-in Four-Up — safest option
     ui_update("Four-Up layout", pause=0.5)
 
-    assignments = {"Red":   volumes.get("t1c"),
-                   "Yellow":volumes.get("flair"),
-                   "Green": volumes.get("t2")}
+    assignments = {"Red": volumes.get("t1c"), "Yellow": volumes.get("flair"), "Green": volumes.get("t2")}
 
     for panel, vol in assignments.items():
         if vol is None:
@@ -172,8 +175,7 @@ try:
         try:
             sw = lm.sliceWidget(panel)
             if sw:
-                sw.sliceLogic().GetSliceCompositeNode()\
-                  .SetBackgroundVolumeID(vol.GetID())
+                sw.sliceLogic().GetSliceCompositeNode().SetBackgroundVolumeID(vol.GetID())
                 sw.sliceLogic().FitSliceToAll()
                 sw.mrmlSliceNode().SetLinkedControl(True)
                 ui_update(f"{panel} = {vol.GetName()}", pause=0.2)
@@ -186,19 +188,18 @@ except Exception as e:
 print("\n[6/6] Jumping to tumour centre...")
 try:
     import numpy as np
+
     jumped = False
     if seg_node and volumes.get("t1c"):
-        for lbl in ["3","2","1"]:
+        for lbl in ["3", "2", "1"]:
             try:
-                arr = slicer.util.arrayFromSegmentBinaryLabelmap(
-                    seg_node, lbl, volumes["t1c"])
+                arr = slicer.util.arrayFromSegmentBinaryLabelmap(seg_node, lbl, volumes["t1c"])
                 if arr is not None and arr.max() > 0:
                     c = np.argwhere(arr > 0).mean(axis=0).astype(int)
                     m = vtk.vtkMatrix4x4()
                     volumes["t1c"].GetIJKToRASMatrix(m)
-                    r = m.MultiplyPoint([float(c[2]),float(c[1]),float(c[0]),1.0])
-                    slicer.modules.markups.logic()\
-                          .JumpSlicesToLocation(r[0],r[1],r[2],True)
+                    r = m.MultiplyPoint([float(c[2]), float(c[1]), float(c[0]), 1.0])
+                    slicer.modules.markups.logic().JumpSlicesToLocation(r[0], r[1], r[2], True)
                     ui_update(f"Jumped to label {lbl} centre", pause=0.3)
                     jumped = True
                     break

@@ -11,11 +11,12 @@ from scipy import ndimage
 
 # ── PY-BRAIN session loader ──────────────────────────────────────────
 import sys as _sys
+
 _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
     from scripts.session_loader import get_session, get_paths, get_patient
 except ImportError:
-    from session_loader import get_session, get_paths, get_patient
+    from session_loader import get_session, get_paths
 
 _sess = get_session()
 _paths = get_paths(_sess)
@@ -43,19 +44,22 @@ def require_file(path: Path, label: str):
 def get_stable_device():
     # Hardware-Specific Optimization (M4 Pro) - Standardized Check
     import torch
+
     if torch.backends.mps.is_available():
         dev = torch.device("mps")
         try:
             _t = torch.zeros(1, 1, 4, 4, 4, device=dev)
             # BrainIAC uses 3D trilinear interpolation for resampling inputs to 96x96x96
-            torch.nn.functional.interpolate(_t, size=(2,2,2), mode="trilinear", align_corners=False)
+            torch.nn.functional.interpolate(_t, size=(2, 2, 2), mode="trilinear", align_corners=False)
             return dev
         except (RuntimeError, NotImplementedError):
             return torch.device("cpu")
     return torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
+
 DEVICE = get_stable_device()
 print(f"🚀 Initializing on device: {DEVICE}")
+
 
 def resolve_input_path(candidates: Iterable[Path]) -> Optional[Path]:
     for p in candidates:
@@ -90,7 +94,7 @@ def compute_tumour_crop_bbox(seg_path: Path, margin_mm: float = 15.0) -> Optiona
     seg_arr = seg_nib.get_fdata()
     vox_sizes = seg_nib.header.get_zooms()[:3]
 
-    tumour_mask = (seg_arr > 0)
+    tumour_mask = seg_arr > 0
     if not tumour_mask.any():
         return None
 
@@ -99,7 +103,7 @@ def compute_tumour_crop_bbox(seg_path: Path, margin_mm: float = 15.0) -> Optiona
     if n_comp > 1:
         sizes = ndimage.sum(tumour_mask, labeled, range(1, n_comp + 1))
         largest_label = int(np.argmax(sizes)) + 1
-        tumour_mask = (labeled == largest_label)
+        tumour_mask = labeled == largest_label
 
     coords = np.argwhere(tumour_mask)
     if coords.size == 0:
@@ -124,7 +128,7 @@ def crop_to_bbox(arr: np.ndarray, bbox: tuple) -> np.ndarray:
     bbox = (x_min, x_max, y_min, y_max, z_min, z_max)
     """
     x_min, x_max, y_min, y_max, z_min, z_max = bbox
-    return arr[x_min:x_max+1, y_min:y_max+1, z_min:z_max+1]
+    return arr[x_min : x_max + 1, y_min : y_max + 1, z_min : z_max + 1]
 
 
 def resize_to_96(arr: np.ndarray) -> torch.Tensor:
@@ -210,7 +214,7 @@ def normalize_state_dict_keys(state_dict):
         nk = k
         for prefix in ("module.", "model.", "net."):
             if nk.startswith(prefix):
-                nk = nk[len(prefix):]
+                nk = nk[len(prefix) :]
         out[nk] = v
     return out
 
@@ -352,7 +356,7 @@ def write_report(idh_prob: float, logit: float, t1c_path: Path, flair_path: Opti
 
     # Fix 1: Do not overwrite grade_probability if it already exists
     if "grade_probability" not in data or data["grade_probability"] is None:
-        data["grade_probability"] = None # only set if not already computed
+        data["grade_probability"] = None  # only set if not already computed
 
     data["idh_probability"] = ensemble_prob
     data["idh_logit"] = logit
@@ -364,15 +368,12 @@ def write_report(idh_prob: float, logit: float, t1c_path: Path, flair_path: Opti
         "fusion_method": fusion_method,
         "vit_raw_prob": round(vit_raw_prob, 4),
         "clinical_prior_prob": round(clinical_prob, 4) if clinical_prob is not None else None,
-        "interpretation": interpretation
+        "interpretation": interpretation,
     }
 
     # Also initialize high_grade if missing
     if "classification" in data and "high_grade" not in data["classification"]:
-        data["classification"]["high_grade"] = {
-            "probability": None,
-            "prediction": "Not available from IDH-only model"
-        }
+        data["classification"]["high_grade"] = {"probability": None, "prediction": "Not available from IDH-only model"}
 
     with open(report_path, "w") as f:
         json.dump(data, f, indent=4)
@@ -401,10 +402,7 @@ def main():
     flair_path = resolve_input_path(flair_candidates)
 
     if t1c_path is None:
-        raise FileNotFoundError(
-            "No T1ce input found. Expected one of:\n"
-            + "\n".join(str(p) for p in t1c_candidates)
-        )
+        raise FileNotFoundError("No T1ce input found. Expected one of:\n" + "\n".join(str(p) for p in t1c_candidates))
 
     # Fix 2: MPS pre-check before run_inference
     device = DEVICE
@@ -414,9 +412,9 @@ def main():
             _t = torch.zeros(1, 1, 4, 4, 4, device=device)
             torch.nn.functional.conv3d(_t, torch.zeros(1, 1, 3, 3, 3, device=device), padding=1)
         except (RuntimeError, NotImplementedError):
-            print(f"  ℹ️  MPS Conv3D not supported — using CPU directly (stable)")
+            print("  ℹ️  MPS Conv3D not supported — using CPU directly (stable)")
             device = torch.device("cpu")
-            
+
     print(f"Using device: {device}")
 
     model = load_model()

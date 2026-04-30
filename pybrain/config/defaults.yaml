@@ -1,8 +1,8 @@
 # pybrain/config/defaults.yaml
 # Segmentation thresholds (post-boost — v6 calibration)
-# Lowered from 0.20 to reduce systematic over-segmentation of edema.
+# Lowered WT threshold to improve edema periphery capture (Dice ED ~0.53 → ~0.65-0.70)
 thresholds:
-  wt: 0.45   # Whole Tumour — raised to prevent edema over-segmentation (radiologist: 32cc)
+  wt: 0.40   # Whole Tumour — lowered to capture edema periphery better
   tc: 0.35   # Tumour Core — recalibrated for correct probability space
   et: 0.35   # Enhancing Tumour — recalibrated (model max ET prob ~0.60)
 
@@ -31,39 +31,42 @@ ct_boost:
   nmi_validation: true  # enable NMI-based registration validation
   force_enable: false  # safety: never force enable CT boost in clinical use
 
-# Ensemble weighting (SegResNet + TTA-4 only — validated stable)
-# Current: SegResNet 60% + TTA-4 40% — both active and validated
-# SwinUNETR and nnU-Net disabled until fully calibrated
+# Ensemble weighting — DERIVED FROM 50-CASE BraTS 2021 CALIBRATION (2026-04-29)
+# After fixing the SwinUNETR input-channel permutation bug (T1/T1c were swapped),
+# re-measured mean Dice on full BraTS volumes:
+#   SegResNet:  TC 0.936 | WT 0.923 | ET 0.856
+#   TTA-4:      TC 0.937 | WT 0.926 | ET 0.860
+#   SwinUNETR:  TC 0.951 | WT 0.942 | ET 0.902   ← strongest on all three channels
+#   Ensemble:   TC 0.948 | WT 0.936 | ET 0.886
+# Weights are Dice-proportional per compute_platt_calibration.py; all three
+# models contribute roughly equally (SwinUNETR slightly higher as expected).
 ensemble_weights:
-  segresnet: 0.60   # Primary model — highest weight
-  tta4: 0.40        # TTA ensemble — noise reduction
-  swinunetr: 0.0    # DISABLED: awaiting Platt calibration (see TODO below)
-  nnunet: 0.0       # DISABLED: no pretrained weights available
+  segresnet: 0.3297   # MONAI BraTS bundle (SegResNet)
+  tta4:      0.3308   # 4-flip TTA over SegResNet
+  swinunetr: 0.3394   # 5-fold MONAI BraTS 2021 SwinUNETR
+  nnunet:    0.0      # DISABLED — no pretrained weights available
 
-# Subregion-specific ensemble weights for optimized Dice scores
-# Based on model strengths: SwinUNETR (WT boundaries), SegResNet (ET core), TTA-4 (noise reduction)
+# Subregion-specific weights — use measured per-channel Dice to weight each
+# model where it is strongest. SwinUNETR is best on TC/WT/ET, so it leads in
+# all three; SegResNet + TTA-4 still contribute meaningful variance-reduction.
 subregion_ensemble_weights:
-  enabled: false    # Set to true to enable subregion-specific weighting
-  adaptive: false   # Set to true for adaptive weights based on uncertainty/performance
-  
-  # Static weights based on model characteristics
-  WT:  # Whole Tumor - SwinUNETR excels at edema boundaries
+  enabled: true
+  adaptive: false
+
+  WT:   # Whole Tumor — SwinUNETR Dice 0.942 > TTA4 0.926 > SegResNet 0.923
+    swinunetr: 0.36
+    tta4:      0.32
+    segresnet: 0.32
+
+  TC:   # Tumor Core — SwinUNETR Dice 0.951 > TTA4 0.937 > SegResNet 0.936
+    swinunetr: 0.36
+    tta4:      0.32
+    segresnet: 0.32
+
+  ET:   # Enhancing Tumor — SwinUNETR Dice 0.902 >> TTA4 0.860 > SegResNet 0.856
     swinunetr: 0.40
-    segresnet: 0.25
-    tta4: 0.20
-    nnunet: 0.15
-  
-  TC:  # Tumor Core - SegResNet strong at core structures
-    segresnet: 0.35
-    nnunet: 0.30
-    swinunetr: 0.20
-    tta4: 0.15
-  
-  ET:  # Enhancing Tumor - SwinUNETR and SegResNet both strong
-    swinunetr: 0.35
-    segresnet: 0.35
-    tta4: 0.20
-    nnunet: 0.10
+    tta4:      0.30
+    segresnet: 0.30
 
 # Advanced Preprocessing
 preprocessing:
@@ -78,14 +81,21 @@ models:
     overlap: 0.5
     roi_size: [128, 128, 128]
   nnunet:
-    enabled: false                      # PERMANENTLY DISABLED: no pretrained weights
-    # NOTE: Do not enable without pretrained nnunet_weights.pth
-    # Training DynUNet on Mac mini is not recommended — use GPU server
+    enabled: false                      # DISABLED: incompatible checkpoint
+    # NOTE 2026-04-29: nnunet_weights.pth IS architecturally a 5-level DynUNet
+    #   (filters [32,64,128,256,512], strides [1,2,2,2,2], 4 upsamples).
+    #   Architecture has been aligned (see filters below); strict load now
+    #   succeeds. However, validation Dice on BraTS2021_00320 is ~0 across
+    #   all 24 channel permutations → the checkpoint's training preprocessing
+    #   / output convention is incompatible with this pipeline. 50-case Platt
+    #   calibration independently assigned weight 0.00, confirming this.
+    #   Do not enable until retrained nnunet_weights.pth is produced
+    #   (see scripts/7_train_nnunet_cloud.py for GPU training).
     bundle_dir: "models/brats_bundle"
-    weights: "nnunet_weights.pth"       # Place pretrained weights here to enable
+    weights: "nnunet_weights.pth"
     roi_size: [128, 128, 128]
     overlap: 0.5
-    filters: [32, 64, 128]              # Must match trained weights (3-stage DynUNet)
+    filters: [32, 64, 128, 256, 512]    # Matches checkpoint architecture
     deep_supervision: false             # Only for training
 
   # Clinical Post-processing
@@ -95,6 +105,39 @@ models:
     shape_filtering: false
     min_solidity: 0.7
     max_eccentricity: 0.96
+    # Remove edema components that are not spatially contiguous with the
+    # tumour core (NCR ∪ ET). Essential for elderly patients where
+    # BraTS-trained models over-predict FLAIR hyperintensity from
+    # leukoaraiosis as peritumoural edema.
+    prune_isolated_edema: true
+    edema_core_gap_mm: 3.0       # Dilation tolerance to absorb boundary noise
+    # Maximum geometric distance (mm) from the nearest tumour-core voxel
+    # that an edema voxel is allowed to reach. Peritumoural edema in GBM
+    # rarely extends beyond 30-40 mm; anything farther is almost certainly
+    # leukoaraiosis (age-related small-vessel disease FLAIR hyperintensity).
+    # Set to 0 to disable the distance constraint.
+    edema_max_distance_mm: 40.0
+    # FLAIR-intensity edema filter — reject edema voxels whose FLAIR
+    # signal is not at least N robust SDs above the within-patient median
+    # of non-tumour brain. Real vasogenic peritumoural edema is markedly
+    # FLAIR-hyperintense; leukoaraiosis is only moderately so.
+    # Disabled if FLAIR not available; tune `edema_min_flair_zscore` lower
+    # if the filter is too aggressive (rare).
+    edema_intensity_filter: true
+    edema_min_flair_zscore: 1.0  # SDs above non-tumour brain median (uniform fallback)
+    # Distance-tiered FLAIR z-thresholds (preferred over uniform).
+    # Each tier is [max_distance_mm, min_zscore]:
+    #   - voxels with distance ≤ tier_distance must satisfy z ≥ tier_zscore
+    #   - voxels beyond the last tier inherit the strictest (last) threshold
+    # Rationale (Celeste 2026-04-29 calibration analysis):
+    #   d ≤  5 mm: trust dim signal — infiltrative edema rim near core
+    #   d ≤ 15 mm: require z ≥ 1.25 — typical peritumoural vasogenic edema
+    #   d > 15 mm: require z ≥ 1.5  — distant FLAIR must be markedly bright
+    # Set to null/empty to fall back to uniform `edema_min_flair_zscore`.
+    edema_zscore_distance_tiers:
+      - [5.0,  1.0]
+      - [15.0, 1.25]
+      - [999.0, 1.5]
 
   # MC-Dropout uncertainty quantification
   # Runs stochastic forward passes with dropout enabled for calibrated uncertainty.
@@ -126,6 +169,11 @@ calibration:
   enabled: true
   factor_file: "calibration_factor.json"
   min_cases_for_auto: 5
+
+# CT calcification threshold for non-GBM detection
+segmentation:
+  non_gbm_ct_calc_threshold_cc: 200.0  # raised for thick-slice hospital CT (25mm slices)
+                                         # lower when using thin-slice CT (1-3mm)
 
 # Clinical consistency validation parameters
 clinical:

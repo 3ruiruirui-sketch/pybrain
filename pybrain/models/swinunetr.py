@@ -6,15 +6,15 @@ Implementation follows INSTIG8R/swin-unetr best practices.
 
 import torch
 import numpy as np
-import os
 import inspect
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional
 from monai.networks.nets.swin_unetr import SwinUNETR
 from monai.inferers.utils import sliding_window_inference
 from pybrain.io.logging_utils import get_logger
 
 logger = get_logger("models.swinunetr")
+
 
 def load_swinunetr(bundle_dir: Path, device: torch.device, model_cfg: Optional[Dict] = None) -> torch.nn.Module:
     """
@@ -25,7 +25,7 @@ def load_swinunetr(bundle_dir: Path, device: torch.device, model_cfg: Optional[D
     """
     weights_name = model_cfg.get("weights", "fold1_swin_unetr.pth") if model_cfg else "fold1_swin_unetr.pth"
     weights_path = bundle_dir / weights_name
-    
+
     if not weights_path.exists():
         raise FileNotFoundError(f"SwinUNETR weights not found at {weights_path}")
 
@@ -33,12 +33,12 @@ def load_swinunetr(bundle_dir: Path, device: torch.device, model_cfg: Optional[D
     # Some MONAI versions (research) require img_size, stable 1.x often omits it.
     sig = inspect.signature(SwinUNETR.__init__)
     kwargs = {
-        "in_channels": 4,           
-        "out_channels": 3,          
+        "in_channels": 4,
+        "out_channels": 3,
         "feature_size": 48,
         "use_checkpoint": True,
     }
-    
+
     roi_size = model_cfg.get("roi_size", [128, 128, 128]) if model_cfg else [128, 128, 128]
     if "img_size" in sig.parameters:
         kwargs["img_size"] = tuple(roi_size)
@@ -47,12 +47,12 @@ def load_swinunetr(bundle_dir: Path, device: torch.device, model_cfg: Optional[D
         logger.info(f"SwinUNETR: Initializing without img_size (architecture defaults to ROI {roi_size})")
 
     model = SwinUNETR(**kwargs).to(device)
-    
+
     # 2. Verified Weight Loading with Strict Validation
     logger.info(f"SwinUNETR: Loading weights from {weights_path}")
     checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint.get("model", checkpoint))
-    
+
     # Strict weight loading: try exact match first, fall back with full diagnostics
     try:
         model.load_state_dict(state_dict, strict=True)
@@ -66,9 +66,10 @@ def load_swinunetr(bundle_dir: Path, device: torch.device, model_cfg: Optional[D
             logger.error(f"SwinUNETR Fallback: {len(msg.missing_keys)} missing keys: {msg.missing_keys}")
         if msg.unexpected_keys:
             logger.warning(f"SwinUNETR Fallback: {len(msg.unexpected_keys)} unexpected keys: {msg.unexpected_keys}")
-        
+
     model.eval()
     return model
+
 
 def normalize_nonzero(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -84,20 +85,19 @@ def normalize_nonzero(tensor: torch.Tensor) -> torch.Tensor:
             tensor[0, c] = (channel - mean) / (std + 1e-8)
     return tensor
 
+
 def run_swinunetr_inference(
-    input_tensor: torch.Tensor,
-    bundle_dir: Path,
-    device: torch.device,
-    model_cfg: Optional[Dict] = None
+    input_tensor: torch.Tensor, bundle_dir: Path, device: torch.device, model_cfg: Optional[Dict] = None
 ) -> np.ndarray:
     """
-    Run SwinUNETR inference. Supports single model or multi-fold averaging. 
+    Run SwinUNETR inference. Supports single model or multi-fold averaging.
     Memory-safe: Loads and unloads folds sequentially.
     """
     import gc
+
     model_cfg = model_cfg or {}
     folds = model_cfg.get("use_folds", [])
-    
+
     # If no folds specified, fallback to single weight from config or default
     if not folds:
         weights_name = model_cfg.get("weights", "fold1_swin_unetr.pth")
@@ -115,11 +115,14 @@ def run_swinunetr_inference(
     # normalize_nonzero() was previously called here and has been removed.
 
     # CHANNEL PERMUTATION: pipeline stacks [FLAIR, T1, T1c, T2] at indices [0,1,2,3].
-    # BraTS 2021 SwinUNETR weights were trained with [T1, T1ce, T2, FLAIR] order
-    # (confirmed from MONAI BraTS 2021 SwinUNETR training config and checkpoint
-    # patch_embed weight shape [48, 4, 2, 2, 2]).
-    # Permutation (1, 2, 3, 0): T1[1]→ch0, T1c[2]→ch1, T2[3]→ch2, FLAIR[0]→ch3.
-    input_normalized = input_tensor[:, [1, 2, 3, 0], ...].clone().to(device)
+    # MONAI BraTS 2021 SwinUNETR weights were trained with [FLAIR, T1c, T1, T2]
+    # — i.e. T1 and T1c are SWAPPED relative to the standard alphabetical order.
+    # Empirically validated 2026-04-29 on BraTS2021_00320 (single-fold, fold1):
+    #     [FLAIR, T1, T1c, T2] (pipeline native)  → Dice {TC 0.00, WT 0.84, ET 0.00}
+    #     [T1, T1c, T2, FLAIR] (previous code)     → Dice {TC 0.00, WT 0.00, ET 0.00}
+    #     [FLAIR, T1c, T1, T2] (this permutation)  → Dice {TC 0.93, WT 0.85, ET 0.81}
+    # Permutation (0, 2, 1, 3): FLAIR[0]→ch0, T1c[2]→ch1, T1[1]→ch2, T2[3]→ch3.
+    input_normalized = input_tensor[:, [0, 2, 1, 3], ...].clone().to(device)
     accumulated_probs = None
     count = 0
 
@@ -132,7 +135,7 @@ def run_swinunetr_inference(
             fold_cfg = model_cfg.copy()
             fold_cfg["weights"] = weights_name
             model = load_swinunetr(bundle_dir, device, model_cfg=fold_cfg)
-            
+
             with torch.no_grad():
                 logger.info(f"SwinUNETR: Inference fold {weights_name} | roi={roi_size} | device={device_type}")
                 with torch.autocast(device_type=device_type, enabled=(device_type != "cpu")):
@@ -142,9 +145,9 @@ def run_swinunetr_inference(
                         sw_batch_size=1,
                         predictor=model,
                         overlap=overlap,
-                        mode="gaussian"
+                        mode="gaussian",
                     )
-                
+
                 # Handle different output formats
                 if isinstance(outputs, dict):
                     # Some models return dict
@@ -155,20 +158,20 @@ def run_swinunetr_inference(
                 else:
                     # Standard tensor output
                     output_tensor = outputs
-                
+
                 # Apply sigmoid to convert logits to probabilities
                 prob = torch.sigmoid(output_tensor).cpu().numpy()
-                
+
                 # Handle different output formats
                 if prob.ndim == 5:  # (batch, channel, x, y, z)
                     prob = prob.squeeze(0)  # Remove batch dimension
-                
+
                 if accumulated_probs is None:
                     accumulated_probs = prob
                 else:
                     accumulated_probs += prob
                 count += 1
-            
+
             # Memory Cleanup
             del model
             if device_type == "mps":
@@ -191,21 +194,19 @@ def run_swinunetr_inference(
 
     # 2. Average results
     res = accumulated_probs / count
-    
-    # [IMPORTANT] BraTS 2021 Models (SwinUNETR) typically output:
-    # Channel 0: TC (Tumor Core)
-    # Channel 1: WT (Whole Tumor)
-    # Channel 2: ET (Enhancing Tumor)
-    #
-    # TODO: Verify channel order matches pipeline expectation (WT/TC/ET).
-    # Pipeline expects: Channel 0 = WT, Channel 1 = TC, Channel 2 = ET
-    # If SwinUNETR outputs TC/WT/ET, need permutation before returning.
-    # Validate on BraTS2021_00000 with known ground truth before enabling ensemble.
+
+    # OUTPUT CHANNEL ORDER — verified empirically (2026-04-29):
+    #   Channel 0: TC (Tumor Core)        — matches pipeline convention
+    #   Channel 1: WT (Whole Tumor)
+    #   Channel 2: ET (Enhancing Tumor)
+    # SegResNet, nnUNet, and the ensemble all use the same [TC, WT, ET] order
+    # (see segresnet.py:90, nnunet.py:227, subregion_ensemble.py:40-41,
+    # staple_ensemble.py:164). No permutation of outputs is required.
     #
     # NOTE: A ×1.05 WT boost was previously applied here (reduced from ×1.15).
     # Both were removed — unvalidated multipliers inside a model wrapper
     # systematically inflate edema volumes and bias ensemble fusion.
     # Any calibration should be done downstream via Platt scaling on a
     # held-out cohort, not as a hardcoded scalar in inference code.
-    
+
     return res

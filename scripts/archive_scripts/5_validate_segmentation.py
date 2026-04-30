@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Segmentation Validation Metrics
-=================================
+ARCHIVED — Segmentation Validation Metrics (Patient-Specific)
+==============================================================
+⚠️ This file contains patient-specific instructions and is DEPRECATED.
+Use scripts/5_validate_segmentation.py (the active version) instead.
+
 Computes Dice, HD95, Sensitivity, Specificity, and FP Volume
 by comparing AI segmentation against a manual ground truth.
 
-HOW TO CREATE THE GROUND TRUTH IN 3D SLICER:
+HOW TO CREATE THE GROUND TRUTH IN 3D SLICER (GENERIC):
   1. Open 3D Slicer
   2. Run load_in_slicer.py in the Python console to load everything
   3. In the left panel click on "BraTS Tumor Segmentation"
@@ -29,29 +32,32 @@ Requirements:
 import sys
 import json
 from pathlib import Path
+
 # ── PY-BRAIN session loader ──────────────────────────────────────────
 import sys as _sys
-from pathlib import Path
+
 _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.session_loader import get_session, get_paths, get_patient
+
 try:
     _sess = get_session()
     _paths = get_paths(_sess)
-    PATIENT       = get_patient(_sess)
+    PATIENT = get_patient(_sess)
     DICOM_MRI_DIR = _paths["mri_dicom_dir"]
-    DICOM_CT_DIR  = _paths.get("ct_dicom_dir")
-    NIFTI_DIR     = _paths.get("nifti_dir", _paths["monai_dir"].parent)
-    MONAI_DIR     = _paths["monai_dir"]
-    EXTRA_DIR     = _paths["extra_dir"]
-    BUNDLE_DIR    = _paths["bundle_dir"]
-    RESULTS_DIR   = _paths["results_dir"]
-    GROUND_TRUTH  = _paths["ground_truth"]
-    OUTPUT_DIR    = _paths.get("output_dir", RESULTS_DIR)
-    
+    DICOM_CT_DIR = _paths.get("ct_dicom_dir")
+    NIFTI_DIR = _paths.get("nifti_dir", _paths["monai_dir"].parent)
+    MONAI_DIR = _paths["monai_dir"]
+    EXTRA_DIR = _paths["extra_dir"]
+    BUNDLE_DIR = _paths["bundle_dir"]
+    RESULTS_DIR = _paths["results_dir"]
+    GROUND_TRUTH = _paths["ground_truth"]
+    OUTPUT_DIR = _paths.get("output_dir", RESULTS_DIR)
+
     DEVICE = "cpu"
     MODEL_DEVICE = "cpu"
     try:
         import torch
+
         if torch.backends.mps.is_available():
             DEVICE = torch.device("mps")
             MODEL_DEVICE = torch.device("cpu")
@@ -88,22 +94,21 @@ from datetime import datetime
 RESULTS_BASE = RESULTS_DIR
 GROUND_TRUTH = RESULTS_BASE / "ground_truth.nii.gz"
 
+
 # Auto-find latest results folder
 def find_latest_results(base: Path) -> Path:
     # 1) Try OUTPUT_DIR from session first
     if OUTPUT_DIR and Path(OUTPUT_DIR).is_dir():
         return Path(OUTPUT_DIR)
     # 2) Fall back to any subdirectory (sorted by name for recency)
-    candidates = sorted(
-        [d for d in base.iterdir()
-         if d.is_dir() and not d.name.startswith(".")],
-        key=lambda d: d.name
-    )
+    candidates = sorted([d for d in base.iterdir() if d.is_dir() and not d.name.startswith(".")], key=lambda d: d.name)
     if not candidates:
         raise FileNotFoundError(f"No results folders found in {base}")
     return candidates[-1]
 
+
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def banner(t):
     print("\n" + "═" * 65)
@@ -126,6 +131,7 @@ except ImportError as e:
 # METRIC FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def dice_score(pred: np.ndarray, gt: np.ndarray) -> float:
     """
     Dice Similarity Coefficient.
@@ -133,34 +139,34 @@ def dice_score(pred: np.ndarray, gt: np.ndarray) -> float:
     Clinical threshold for good segmentation: Dice > 0.80
     """
     pred_bool = pred.astype(bool)
-    gt_bool   = gt.astype(bool)
+    gt_bool = gt.astype(bool)
     intersection = (pred_bool & gt_bool).sum()
-    denom        = pred_bool.sum() + gt_bool.sum()
+    denom = pred_bool.sum() + gt_bool.sum()
     if denom == 0:
         return 1.0 if pred_bool.sum() == 0 else 0.0
     return float(2 * intersection / denom)
 
 
-def hausdorff_95(pred: np.ndarray, gt: np.ndarray,
-                 voxel_spacing: tuple = (1.0, 1.0, 1.0)) -> float:
+def hausdorff_95(pred: np.ndarray, gt: np.ndarray, voxel_spacing: tuple = (1.0, 1.0, 1.0)) -> float:
     """
     95th percentile Hausdorff Distance in mm.
     Measures worst-case boundary error (excluding top 5% outliers).
     Clinical threshold for good segmentation: HD95 < 5 mm
     """
     pred_pts = np.argwhere(pred > 0).astype(float)
-    gt_pts   = np.argwhere(gt   > 0).astype(float)
+    gt_pts = np.argwhere(gt > 0).astype(float)
 
     if len(pred_pts) == 0 or len(gt_pts) == 0:
         return float("inf")
 
     # Scale by voxel spacing to get mm distances
     pred_pts *= np.array(voxel_spacing)
-    gt_pts   *= np.array(voxel_spacing)
+    gt_pts *= np.array(voxel_spacing)
 
     # Compute distances from pred→gt and gt→pred
     from scipy.spatial import cKDTree
-    tree_gt   = cKDTree(gt_pts)
+
+    tree_gt = cKDTree(gt_pts)
     tree_pred = cKDTree(pred_pts)
 
     dist_pred_to_gt, _ = tree_gt.query(pred_pts)
@@ -191,8 +197,7 @@ def specificity(pred: np.ndarray, gt: np.ndarray) -> float:
     return float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
 
 
-def false_positive_volume(pred: np.ndarray, gt: np.ndarray,
-                           vox_mm3: float = 1.0) -> float:
+def false_positive_volume(pred: np.ndarray, gt: np.ndarray, vox_mm3: float = 1.0) -> float:
     """
     Volume of falsely segmented tissue in cc.
     Voxels the AI marked as tumour that are NOT in ground truth.
@@ -201,8 +206,7 @@ def false_positive_volume(pred: np.ndarray, gt: np.ndarray,
     return float(fp_voxels) * vox_mm3 / 1000.0
 
 
-def false_negative_volume(pred: np.ndarray, gt: np.ndarray,
-                           vox_mm3: float = 1.0) -> float:
+def false_negative_volume(pred: np.ndarray, gt: np.ndarray, vox_mm3: float = 1.0) -> float:
     """
     Volume of missed tumour tissue in cc.
     Voxels in ground truth that the AI missed.
@@ -223,23 +227,21 @@ def volume_similarity(pred: np.ndarray, gt: np.ndarray) -> float:
     return float(1.0 - abs(vp - vg) / (vp + vg))
 
 
-def compute_all_metrics(pred: np.ndarray, gt: np.ndarray,
-                         voxel_spacing: tuple,
-                         name: str = "Segmentation") -> dict:
+def compute_all_metrics(pred: np.ndarray, gt: np.ndarray, voxel_spacing: tuple, name: str = "Segmentation") -> dict:
     """Compute all metrics for one pred/gt pair."""
     vox_mm3 = voxel_spacing[0] * voxel_spacing[1] * voxel_spacing[2]
 
     return {
-        "name":                name,
-        "dice":                round(float(dice_score(pred, gt)), 4),
-        "hd95_mm":             round(float(hausdorff_95(pred, gt, voxel_spacing)), 2),
-        "sensitivity":         round(float(sensitivity(pred, gt)), 4),
-        "specificity":         round(float(specificity(pred, gt)), 4),
-        "fp_volume_cc":        round(float(false_positive_volume(pred, gt, vox_mm3)), 2),
-        "fn_volume_cc":        round(float(false_negative_volume(pred, gt, vox_mm3)), 2),
-        "volume_similarity":   round(float(volume_similarity(pred, gt)), 4),
-        "pred_volume_cc":      round(float(pred.astype(bool).sum()) * vox_mm3 / 1000, 2),
-        "gt_volume_cc":        round(float(gt.astype(bool).sum())   * vox_mm3 / 1000, 2),
+        "name": name,
+        "dice": round(float(dice_score(pred, gt)), 4),
+        "hd95_mm": round(float(hausdorff_95(pred, gt, voxel_spacing)), 2),
+        "sensitivity": round(float(sensitivity(pred, gt)), 4),
+        "specificity": round(float(specificity(pred, gt)), 4),
+        "fp_volume_cc": round(float(false_positive_volume(pred, gt, vox_mm3)), 2),
+        "fn_volume_cc": round(float(false_negative_volume(pred, gt, vox_mm3)), 2),
+        "volume_similarity": round(float(volume_similarity(pred, gt)), 4),
+        "pred_volume_cc": round(float(pred.astype(bool).sum()) * vox_mm3 / 1000, 2),
+        "gt_volume_cc": round(float(gt.astype(bool).sum()) * vox_mm3 / 1000, 2),
     }
 
 
@@ -248,42 +250,42 @@ def print_metrics(m: dict):
 
     def grade(metric, value, thresholds):
         """Return ✅ / ⚠️ / ❌ based on thresholds (good, warn)."""
-        if value >= thresholds[0]: return "✅"
-        if value >= thresholds[1]: return "⚠️ "
+        if value >= thresholds[0]:
+            return "✅"
+        if value >= thresholds[1]:
+            return "⚠️ "
         return "❌"
 
-    dice_g  = grade("dice",        m["dice"],        (0.80, 0.60))
-    hd_g    = grade("hd95",  -m["hd95_mm"],    (-5,  -15))   # inverted: lower=better
-    sens_g  = grade("sens",        m["sensitivity"], (0.80, 0.60))
-    vs_g    = grade("vs",          m["volume_similarity"], (0.85, 0.70))
+    dice_g = grade("dice", m["dice"], (0.80, 0.60))
+    hd_g = grade("hd95", -m["hd95_mm"], (-5, -15))  # inverted: lower=better
+    sens_g = grade("sens", m["sensitivity"], (0.80, 0.60))
+    vs_g = grade("vs", m["volume_similarity"], (0.85, 0.70))
 
     print(f"\n  {'Metric':30s}  {'Value':>10}  {'Grade':>6}  Clinical threshold")
-    print(f"  {'─'*30}  {'─'*10}  {'─'*6}  {'─'*30}")
+    print(f"  {'─' * 30}  {'─' * 10}  {'─' * 6}  {'─' * 30}")
     print(f"  {'Dice score':30s}  {m['dice']:>10.4f}  {dice_g}    > 0.80 = good")
     print(f"  {'HD95 (mm)':30s}  {m['hd95_mm']:>10.2f}  {hd_g}    < 5 mm = good")
     print(f"  {'Sensitivity (recall)':30s}  {m['sensitivity']:>10.4f}  {sens_g}    > 0.80 = good")
     print(f"  {'Specificity':30s}  {m['specificity']:>10.4f}  {'  '}    > 0.99 expected")
     print(f"  {'Volume similarity':30s}  {m['volume_similarity']:>10.4f}  {vs_g}    > 0.85 = good")
-    print(f"  {'─'*30}  {'─'*10}")
+    print(f"  {'─' * 30}  {'─' * 10}")
     print(f"  {'Predicted volume (cc)':30s}  {m['pred_volume_cc']:>10.2f}")
     print(f"  {'Ground truth volume (cc)':30s}  {m['gt_volume_cc']:>10.2f}")
-    print(f"  {'False positive volume (cc)':30s}  {m['fp_volume_cc']:>10.2f}  "
-          f"     tissue wrongly added")
-    print(f"  {'False negative volume (cc)':30s}  {m['fn_volume_cc']:>10.2f}  "
-          f"     tumour missed by AI")
+    print(f"  {'False positive volume (cc)':30s}  {m['fp_volume_cc']:>10.2f}       tissue wrongly added")
+    print(f"  {'False negative volume (cc)':30s}  {m['fn_volume_cc']:>10.2f}       tumour missed by AI")
 
 
 def interpret_results(metrics_list: list):
     """Print a plain-language summary of what the metrics mean."""
-    print(f"\n  Plain language interpretation:")
-    print(f"  {'─'*60}")
+    print("\n  Plain language interpretation:")
+    print(f"  {'─' * 60}")
     for m in metrics_list:
         print(f"\n  [{m['name']}]")
-        d = m['dice']
-        s = m['sensitivity']
-        h = m['hd95_mm']
-        fp = m['fp_volume_cc']
-        fn = m['fn_volume_cc']
+        d = m["dice"]
+        s = m["sensitivity"]
+        h = m["hd95_mm"]
+        fp = m["fp_volume_cc"]
+        fn = m["fn_volume_cc"]
 
         if d >= 0.80:
             print(f"  ✅ Dice {d:.2f} — good overlap with ground truth")
@@ -293,26 +295,24 @@ def interpret_results(metrics_list: list):
             print(f"  ❌ Dice {d:.2f} — poor overlap, major corrections needed")
 
         if s >= 0.80:
-            print(f"  ✅ Sensitivity {s:.2f} — AI found {s*100:.0f}% of the tumour")
+            print(f"  ✅ Sensitivity {s:.2f} — AI found {s * 100:.0f}% of the tumour")
         elif s >= 0.60:
-            print(f"  ⚠️  Sensitivity {s:.2f} — AI missed {(1-s)*100:.0f}% of tumour "
-                  f"({fn:.1f} cc)")
+            print(f"  ⚠️  Sensitivity {s:.2f} — AI missed {(1 - s) * 100:.0f}% of tumour ({fn:.1f} cc)")
         else:
-            print(f"  ❌ Sensitivity {s:.2f} — AI missed more than 40% of tumour "
-                  f"({fn:.1f} cc) — manual correction essential")
+            print(
+                f"  ❌ Sensitivity {s:.2f} — AI missed more than 40% of tumour "
+                f"({fn:.1f} cc) — manual correction essential"
+            )
 
         if h < 5:
             print(f"  ✅ HD95 {h:.1f} mm — boundary error under 5 mm")
         elif h < 15:
-            print(f"  ⚠️  HD95 {h:.1f} mm — boundary off by up to {h:.0f} mm "
-                  f"in worst areas")
+            print(f"  ⚠️  HD95 {h:.1f} mm — boundary off by up to {h:.0f} mm in worst areas")
         else:
-            print(f"  ❌ HD95 {h:.1f} mm — large boundary errors, "
-                  f"likely missing whole regions")
+            print(f"  ❌ HD95 {h:.1f} mm — large boundary errors, likely missing whole regions")
 
         if fp > 5:
-            print(f"  ⚠️  FP volume {fp:.1f} cc — AI over-segmented, "
-                  f"check for false positives")
+            print(f"  ⚠️  FP volume {fp:.1f} cc — AI over-segmented, check for false positives")
         else:
             print(f"  ✅ FP volume {fp:.1f} cc — minimal over-segmentation")
 
@@ -353,26 +353,24 @@ except FileNotFoundError as e:
     print(f"  ❌ {e}")
     sys.exit(1)
 
-gt_nib     = nib.load(str(GROUND_TRUTH))
-gt_arr     = (gt_nib.get_fdata() > 0).astype(np.uint8)
-vox_zoom   = gt_nib.header.get_zooms()[:3]
-vox_mm3    = float(vox_zoom[0] * vox_zoom[1] * vox_zoom[2])
+gt_nib = nib.load(str(GROUND_TRUTH))
+gt_arr = (gt_nib.get_fdata() > 0).astype(np.uint8)
+vox_zoom = gt_nib.header.get_zooms()[:3]
+vox_mm3 = float(vox_zoom[0] * vox_zoom[1] * vox_zoom[2])
 
 print(f"  Ground truth shape   : {gt_arr.shape}")
 print(f"  Ground truth voxels  : {gt_arr.sum():,}")
 print(f"  Ground truth volume  : {gt_arr.sum() * vox_mm3 / 1000:.1f} cc")
-print(f"  Voxel spacing        : {tuple(round(float(v),2) for v in vox_zoom)} mm")
+print(f"  Voxel spacing        : {tuple(round(float(v), 2) for v in vox_zoom)} mm")
 
 # Segmentations to evaluate
 segs_to_evaluate = {
-    "BraTS only":           latest_dir / "segmentation_full.nii.gz",
-    "BraTS + CT merged":    latest_dir / "segmentation_ct_merged.nii.gz",
+    "BraTS only": latest_dir / "segmentation_full.nii.gz",
+    "BraTS + CT merged": latest_dir / "segmentation_ct_merged.nii.gz",
 }
 
 # Also check for previous runs to track improvement over time
-prev_dirs = sorted([d for d in RESULTS_BASE.iterdir()
-                    if d.is_dir() and not d.name.startswith(".")
-                    and d != latest_dir])
+prev_dirs = sorted([d for d in RESULTS_BASE.iterdir() if d.is_dir() and not d.name.startswith(".") and d != latest_dir])
 if prev_dirs:
     prev_seg = prev_dirs[-1] / "segmentation_full.nii.gz"
     if prev_seg.exists():
@@ -388,19 +386,19 @@ for seg_name, seg_path in segs_to_evaluate.items():
         continue
 
     print(f"\n  Computing metrics for: {seg_name}")
-    seg_nib  = nib.load(str(seg_path))
-    seg_arr  = (seg_nib.get_fdata() > 0).astype(np.uint8)
+    seg_nib = nib.load(str(seg_path))
+    seg_arr = (seg_nib.get_fdata() > 0).astype(np.uint8)
 
     # Match shapes if needed
     if seg_arr.shape != gt_arr.shape:
         print(f"  ⚠️  Shape mismatch: pred={seg_arr.shape} gt={gt_arr.shape}")
-        min_s    = tuple(min(a,b) for a,b in zip(seg_arr.shape, gt_arr.shape))
-        seg_arr  = seg_arr[:min_s[0], :min_s[1], :min_s[2]]
-        gt_crop  = gt_arr[:min_s[0],  :min_s[1],  :min_s[2]]
+        min_s = tuple(min(a, b) for a, b in zip(seg_arr.shape, gt_arr.shape))
+        seg_arr = seg_arr[: min_s[0], : min_s[1], : min_s[2]]
+        gt_crop = gt_arr[: min_s[0], : min_s[1], : min_s[2]]
     else:
         gt_crop = gt_arr
 
-    print(f"  Running Dice…", end=" ", flush=True)
+    print("  Running Dice…", end=" ", flush=True)
     m = compute_all_metrics(seg_arr, gt_crop, vox_zoom, seg_name)
     print(f"Dice={m['dice']:.4f}", end="  ", flush=True)
     print(f"HD95={m['hd95_mm']:.1f}mm", end="  ", flush=True)
@@ -418,21 +416,23 @@ if len(gt_labels) > 1:
     seg_full_path = latest_dir / "segmentation_full.nii.gz"
     if seg_full_path.exists():
         seg_full = nib.load(str(seg_full_path)).get_fdata().astype(np.uint8)
-        gt_full  = gt_nib.get_fdata().astype(np.uint8)
+        gt_full = gt_nib.get_fdata().astype(np.uint8)
 
         region_map = {1: "Necrotic core", 2: "Edema", 3: "Enhancing"}
         for label, name in region_map.items():
             if int(np.sum(gt_full == label)) == 0:
                 continue
             pred_r = np.array(seg_full == label, dtype=np.uint8)
-            gt_r   = np.array(gt_full  == label, dtype=np.uint8)
-            m_r    = compute_all_metrics(pred_r, gt_r, vox_zoom, name)
+            gt_r = np.array(gt_full == label, dtype=np.uint8)
+            m_r = compute_all_metrics(pred_r, gt_r, vox_zoom, name)
             print(f"\n  {name}:")
-            print(f"    Dice={m_r['dice']:.4f}  "
-                  f"HD95={m_r['hd95_mm']:.1f}mm  "
-                  f"Sens={m_r['sensitivity']:.4f}  "
-                  f"Pred={m_r['pred_volume_cc']:.1f}cc  "
-                  f"GT={m_r['gt_volume_cc']:.1f}cc")
+            print(
+                f"    Dice={m_r['dice']:.4f}  "
+                f"HD95={m_r['hd95_mm']:.1f}mm  "
+                f"Sens={m_r['sensitivity']:.4f}  "
+                f"Pred={m_r['pred_volume_cc']:.1f}cc  "
+                f"GT={m_r['gt_volume_cc']:.1f}cc"
+            )
 
 # ── Interpretation ─────────────────────────────────────────────────────
 if all_metrics:
@@ -441,44 +441,47 @@ if all_metrics:
 
     # Show improvement if multiple segmentations compared
     if len(all_metrics) >= 2:
-        print(f"\n  Comparison table:")
-        print(f"  {'Segmentation':25s}  {'Dice':>6}  {'HD95':>8}  "
-              f"{'Sens':>6}  {'Vol(cc)':>8}  {'FP(cc)':>7}")
-        print(f"  {'─'*25}  {'─'*6}  {'─'*8}  {'─'*6}  {'─'*8}  {'─'*7}")
+        print("\n  Comparison table:")
+        print(f"  {'Segmentation':25s}  {'Dice':>6}  {'HD95':>8}  {'Sens':>6}  {'Vol(cc)':>8}  {'FP(cc)':>7}")
+        print(f"  {'─' * 25}  {'─' * 6}  {'─' * 8}  {'─' * 6}  {'─' * 8}  {'─' * 7}")
         for m in all_metrics:
-            print(f"  {m['name']:25s}  {m['dice']:>6.4f}  "
-                  f"{m['hd95_mm']:>7.1f}mm  "
-                  f"{m['sensitivity']:>6.4f}  "
-                  f"{m['pred_volume_cc']:>7.1f}cc  "
-                  f"{m['fp_volume_cc']:>6.1f}cc")
+            print(
+                f"  {m['name']:25s}  {m['dice']:>6.4f}  "
+                f"{m['hd95_mm']:>7.1f}mm  "
+                f"{m['sensitivity']:>6.4f}  "
+                f"{m['pred_volume_cc']:>7.1f}cc  "
+                f"{m['fp_volume_cc']:>6.1f}cc"
+            )
 
         # Check if CT merger actually improved things
         brats_m = next((m for m in all_metrics if "BraTS only" in m["name"]), None)
-        ct_m    = next((m for m in all_metrics if "CT merged"  in m["name"]), None)
+        ct_m = next((m for m in all_metrics if "CT merged" in m["name"]), None)
         if brats_m and ct_m:
             dice_delta = ct_m["dice"] - brats_m["dice"]
             sens_delta = ct_m["sensitivity"] - brats_m["sensitivity"]
-            print(f"\n  CT integration effect:")
-            print(f"    Dice change      : {dice_delta:+.4f}  "
-                  f"({'improved' if dice_delta > 0 else 'worsened'})")
-            print(f"    Sensitivity change: {sens_delta:+.4f}  "
-                  f"({'improved' if sens_delta > 0 else 'worsened'})")
+            print("\n  CT integration effect:")
+            print(f"    Dice change      : {dice_delta:+.4f}  ({'improved' if dice_delta > 0 else 'worsened'})")
+            print(f"    Sensitivity change: {sens_delta:+.4f}  ({'improved' if sens_delta > 0 else 'worsened'})")
             if dice_delta < 0:
-                print(f"    ⚠️  CT merger hurt Dice — CT added false positives")
-                print(f"    Try increasing dilation radius in ct_integration.py")
+                print("    ⚠️  CT merger hurt Dice — CT added false positives")
+                print("    Try increasing dilation radius in ct_integration.py")
             else:
-                print(f"    ✅ CT merger improved segmentation quality")
+                print("    ✅ CT merger improved segmentation quality")
 
 # ── Save results JSON ──────────────────────────────────────────────────
-timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-out_json   = RESULTS_BASE / f"validation_{timestamp}.json"
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+out_json = RESULTS_BASE / f"validation_{timestamp}.json"
 with open(out_json, "w") as f:
-    json.dump({
-        "timestamp":     timestamp,
-        "ground_truth":  str(GROUND_TRUTH),
-        "results_dir":   str(latest_dir),
-        "metrics":       all_metrics,
-    }, f, indent=2)
+    json.dump(
+        {
+            "timestamp": timestamp,
+            "ground_truth": str(GROUND_TRUTH),
+            "results_dir": str(latest_dir),
+            "metrics": all_metrics,
+        },
+        f,
+        indent=2,
+    )
 
 banner("DONE")
 print(f"""

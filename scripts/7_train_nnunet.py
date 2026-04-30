@@ -18,16 +18,18 @@ Usage:
   python3 scripts/7_train_nnunet.py --epochs 20 --fold 0 --lr 1e-4
 """
 
-import os
 import sys
 import json
 import argparse
 import random
+import psutil
 from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import numpy as np
+from tqdm import tqdm
 
 # ── Project root ──────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -36,14 +38,20 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from pybrain.io.logging_utils import setup_logging
 from pybrain.models.nnunet import load_nnunet
 
-from monai.networks.nets import DynUNet
 from monai.losses import DiceLoss
-from monai.data import DataLoader, Dataset, partition_dataset
+from monai.data import DataLoader, Dataset
 from monai.transforms import (
-    Compose, LoadImaged, EnsureChannelFirstd, NormalizeIntensityd,
-    RandFlipd, RandRotate90d, ToTensord, CastToTyped,
-    ResizeWithPadOrCropd
+    Compose,
+    LoadImaged,
+    EnsureChannelFirstd,
+    NormalizeIntensityd,
+    RandFlipd,
+    RandRotate90d,
+    ToTensord,
+    CastToTyped,
+    ResizeWithPadOrCropd,
 )
+
 
 # ── Device ──────────────────────────────────────────────────────────────────
 def get_device():
@@ -52,6 +60,20 @@ def get_device():
     elif torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
+
+
+# ── Memory monitoring ─────────────────────────────────────────────────────────
+def log_memory_status(stage=""):
+    """Log current memory and swap usage."""
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    logger = setup_logging()
+    logger.info(
+        f"[{stage}] RAM: {mem.used / 1024**3:.1f}GB / {mem.total / 1024**3:.1f}GB "
+        f"({mem.percent}%) | Swap: {swap.used / 1024**3:.1f}GB / {swap.total / 1024**3:.1f}GB "
+        f"({swap.percent}%)"
+    )
+    return mem.percent, swap.percent
 
 
 # ── BraTS2021 label remapping ───────────────────────────────────────────────
@@ -82,19 +104,21 @@ def discover_cases(data_root: Path):
             continue
         prefix = case_dir.name
         seg = case_dir / f"{prefix}_seg.nii.gz"
-        t1   = case_dir / f"{prefix}_t1.nii.gz"
+        t1 = case_dir / f"{prefix}_t1.nii.gz"
         t1ce = case_dir / f"{prefix}_t1ce.nii.gz"
-        t2   = case_dir / f"{prefix}_t2.nii.gz"
-        flair= case_dir / f"{prefix}_flair.nii.gz"
+        t2 = case_dir / f"{prefix}_t2.nii.gz"
+        flair = case_dir / f"{prefix}_flair.nii.gz"
         if all(p.exists() for p in [seg, t1, t1ce, t2, flair]):
-            cases.append({
-                "t1":    str(t1),
-                "t1ce":  str(t1ce),
-                "t2":    str(t2),
-                "flair": str(flair),
-                "seg":   str(seg),
-                "id":    prefix,
-            })
+            cases.append(
+                {
+                    "t1": str(t1),
+                    "t1ce": str(t1ce),
+                    "t2": str(t2),
+                    "flair": str(flair),
+                    "seg": str(seg),
+                    "id": prefix,
+                }
+            )
     return cases
 
 
@@ -103,43 +127,48 @@ NNUNET_PATCH_SIZE = [128, 128, 128]  # Standard nnU-Net input size
 
 
 def get_train_transforms():
-    return Compose([
-        LoadImaged(keys=["t1", "t1ce", "t2", "flair", "seg"]),
-        EnsureChannelFirstd(keys=["t1", "t1ce", "t2", "flair", "seg"]),
-        CastToTyped(keys=["t1", "t1ce", "t2", "flair", "seg"], dtype=torch.float32),
-        NormalizeIntensityd(keys=["t1", "t1ce", "t2", "flair"], nonzero=True),
-        # Resize all volumes (images + seg) to 128^3 (standard nnU-Net input)
-        ResizeWithPadOrCropd(keys=["t1", "t1ce", "t2", "flair", "seg"], spatial_size=NNUNET_PATCH_SIZE),
-        # Per-key RandFlipd on MPS avoids MONAI #6384 crash with multi-key spatial transforms.
-        # Each modality gets independent flip — acceptable for co-registered brain MRI.
-        RandFlipd(keys=["t1"],    prob=0.5, spatial_axis=0),
-        RandFlipd(keys=["t1ce"],  prob=0.5, spatial_axis=0),
-        RandFlipd(keys=["t2"],    prob=0.5, spatial_axis=0),
-        RandFlipd(keys=["flair"], prob=0.5, spatial_axis=0),
-        RandFlipd(keys=["t1"],    prob=0.5, spatial_axis=1),
-        RandFlipd(keys=["t1ce"],  prob=0.5, spatial_axis=1),
-        RandFlipd(keys=["t2"],    prob=0.5, spatial_axis=1),
-        RandFlipd(keys=["flair"], prob=0.5, spatial_axis=1),
-        RandRotate90d(keys=["t1", "t1ce", "t2", "flair", "seg"], prob=0.5),
-        ToTensord(keys=["t1", "t1ce", "t2", "flair", "seg"]),
-    ])
+    return Compose(
+        [
+            LoadImaged(keys=["t1", "t1ce", "t2", "flair", "seg"]),
+            EnsureChannelFirstd(keys=["t1", "t1ce", "t2", "flair", "seg"]),
+            CastToTyped(keys=["t1", "t1ce", "t2", "flair", "seg"], dtype=torch.float32),
+            NormalizeIntensityd(keys=["t1", "t1ce", "t2", "flair"], nonzero=True),
+            # Resize all volumes (images + seg) to 128^3 (standard nnU-Net input)
+            ResizeWithPadOrCropd(keys=["t1", "t1ce", "t2", "flair", "seg"], spatial_size=NNUNET_PATCH_SIZE),
+            # Per-key RandFlipd on MPS avoids MONAI #6384 crash with multi-key spatial transforms.
+            # Each modality gets independent flip — acceptable for co-registered brain MRI.
+            RandFlipd(keys=["t1"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["t1ce"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["t2"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["flair"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["t1"], prob=0.5, spatial_axis=1),
+            RandFlipd(keys=["t1ce"], prob=0.5, spatial_axis=1),
+            RandFlipd(keys=["t2"], prob=0.5, spatial_axis=1),
+            RandFlipd(keys=["flair"], prob=0.5, spatial_axis=1),
+            RandRotate90d(keys=["t1", "t1ce", "t2", "flair", "seg"], prob=0.5),
+            ToTensord(keys=["t1", "t1ce", "t2", "flair", "seg"]),
+        ]
+    )
 
 
 def get_val_transforms():
-    return Compose([
-        LoadImaged(keys=["t1", "t1ce", "t2", "flair", "seg"]),
-        EnsureChannelFirstd(keys=["t1", "t1ce", "t2", "flair", "seg"]),
-        CastToTyped(keys=["t1", "t1ce", "t2", "flair", "seg"], dtype=torch.float32),
-        NormalizeIntensityd(keys=["t1", "t1ce", "t2", "flair"], nonzero=True),
-        ResizeWithPadOrCropd(keys=["t1", "t1ce", "t2", "flair", "seg"], spatial_size=NNUNET_PATCH_SIZE),
-        ToTensord(keys=["t1", "t1ce", "t2", "flair", "seg"]),
-    ])
+    return Compose(
+        [
+            LoadImaged(keys=["t1", "t1ce", "t2", "flair", "seg"]),
+            EnsureChannelFirstd(keys=["t1", "t1ce", "t2", "flair", "seg"]),
+            CastToTyped(keys=["t1", "t1ce", "t2", "flair", "seg"], dtype=torch.float32),
+            NormalizeIntensityd(keys=["t1", "t1ce", "t2", "flair"], nonzero=True),
+            ResizeWithPadOrCropd(keys=["t1", "t1ce", "t2", "flair", "seg"], spatial_size=NNUNET_PATCH_SIZE),
+            ToTensord(keys=["t1", "t1ce", "t2", "flair", "seg"]),
+        ]
+    )
 
 
 # ── Collate function ───────────────────────────────────────────────────────
 def _resize_seg_nearest(seg: torch.Tensor, target: list) -> torch.Tensor:
     """Resize seg (B,1,D,H,W) → (B,target[0],target[1],target[2]) with nearest."""
     import torch.nn.functional as F
+
     # Convert MetaTensor → numpy → plain torch.Tensor to bypass torch_function
     seg_np = seg.detach().cpu().numpy()
     seg_plain = torch.from_numpy(seg_np)
@@ -149,9 +178,9 @@ def _resize_seg_nearest(seg: torch.Tensor, target: list) -> torch.Tensor:
 
 def brats_collate(batch):
     """Stack 4 MRI channels + label into (B, C, D, H, W) at 128^3 resolution."""
-    t1    = torch.stack([b["t1"]    for b in batch], dim=0)
-    t1ce  = torch.stack([b["t1ce"]  for b in batch], dim=0)
-    t2    = torch.stack([b["t2"]    for b in batch], dim=0)
+    t1 = torch.stack([b["t1"] for b in batch], dim=0)
+    t1ce = torch.stack([b["t1ce"] for b in batch], dim=0)
+    t2 = torch.stack([b["t2"] for b in batch], dim=0)
     flair = torch.stack([b["flair"] for b in batch], dim=0)
     # seg from dataset is already (B, 1, D, H, W) — no extra unsqueeze needed
     seg_raw = torch.stack([b["seg"] for b in batch], dim=0)  # (B,1,D,H,W)
@@ -167,9 +196,9 @@ def brats_collate(batch):
 
 
 def val_collate(batch):
-    t1    = torch.stack([b["t1"]    for b in batch], dim=0)
-    t1ce  = torch.stack([b["t1ce"]  for b in batch], dim=0)
-    t2    = torch.stack([b["t2"]    for b in batch], dim=0)
+    t1 = torch.stack([b["t1"] for b in batch], dim=0)
+    t1ce = torch.stack([b["t1ce"] for b in batch], dim=0)
+    t2 = torch.stack([b["t2"] for b in batch], dim=0)
     flair = torch.stack([b["flair"] for b in batch], dim=0)
     seg_raw = torch.stack([b["seg"] for b in batch], dim=0)  # (B,1,D,H,W)
     seg_resized = _resize_seg_nearest(seg_raw, NNUNET_PATCH_SIZE)
@@ -194,6 +223,53 @@ def dice_per_class(pred, target, num_classes=4):
     return dice_scores
 
 
+# ── Checkpoint saving ─────────────────────────────────────────────────────────
+def save_checkpoint(model, optimizer, scheduler, epoch, best_val_dice, best_epoch, output_path):
+    """Save full training checkpoint for resuming."""
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "best_val_dice": best_val_dice,
+        "best_epoch": best_epoch,
+    }
+    torch.save(checkpoint, output_path)
+
+
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler, device):
+    """Load training checkpoint and resume state. optimizer/scheduler may be None
+    on a first pass (model-only load); pass them on the second pass after they
+    are constructed to restore their state."""
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if model is not None:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scheduler is not None:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    return checkpoint["epoch"], checkpoint["best_val_dice"], checkpoint["best_epoch"]
+
+
+def cleanup_old_checkpoints(checkpoint_dir: Path, keep_last: int = 2, best_path: Optional[Path] = None) -> None:
+    """Delete old `checkpoint_epoch*.pth` files, keeping only the most recent
+    `keep_last` and (optionally) the file that holds the current best weights."""
+    files = sorted(
+        checkpoint_dir.glob("checkpoint_epoch*.pth"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    keep: set = set(files[:keep_last])
+    if best_path is not None and best_path.exists():
+        keep.add(best_path)
+    for f in files:
+        if f not in keep:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+
 # ── Training loop ────────────────────────────────────────────────────────────
 def train_fold(
     model,
@@ -204,58 +280,79 @@ def train_fold(
     lr,
     logger,
     output_path,
+    optimizer,
+    scheduler,
     fold=0,
     val_freq=5,
+    start_epoch=0,
+    start_best_val_dice=0.0,
+    start_best_epoch=0,
+    early_stop_patience=10,
 ):
     model.train()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     # Dice + CE combined loss
     dice_loss = DiceLoss(include_background=False, to_onehot_y=True, softmax=True)
-    ce_loss   = nn.CrossEntropyLoss()
+    ce_loss = nn.CrossEntropyLoss()
 
     # AMP: only CUDA supports FP16 conv transpose on MPS we fall back to FP32
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda" if use_amp else "cpu")
 
-    best_val_dice = 0.0
-    best_epoch     = 0
+    best_val_dice = start_best_val_dice
+    best_epoch = start_best_epoch
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
         epoch_dice = 0.0
-        n_batches  = 0
+        n_batches = 0
 
-        for batch in train_loader:
+        # Progress bar for training
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}", unit="batch")
+
+        for batch in pbar:
             images = batch["image"].to(device)
             labels = batch["label"].to(device)
 
             optimizer.zero_grad()
 
             with torch.amp.autocast(device_type="cuda" if use_amp else "cpu", enabled=use_amp):
-                outputs = model(images)           # (B, 4, D, H, W) logits
-                d_loss  = dice_loss(outputs, labels.unsqueeze(1))  # DiceLoss needs (B,1,D,H,W)
-                c_loss  = ce_loss(outputs, labels)
-                loss    = d_loss + c_loss
+                outputs = model(images)  # (B, 4, D, H, W) logits
+                d_loss = dice_loss(outputs, labels.unsqueeze(1))  # DiceLoss needs (B,1,D,H,W)
+                c_loss = ce_loss(outputs, labels)
+                loss = d_loss + c_loss
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            epoch_loss  += loss.item()
+            epoch_loss += loss.item()
             with torch.no_grad():
                 preds = outputs.argmax(dim=1)
-                dice  = dice_per_class(preds, labels)
+                dice = dice_per_class(preds, labels)
                 epoch_dice += np.mean(dice)
             n_batches += 1
 
+            # Update progress bar with current metrics
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "dice": f"{np.mean(dice):.4f}"})
+
+            # Memory cleanup every 10 batches to avoid swap on M4 Pro
+            if n_batches % 10 == 0:
+                if device.type == "mps":
+                    torch.mps.empty_cache()
+                elif device.type == "cuda":
+                    torch.cuda.empty_cache()
+                # Check memory usage
+                mem_pct, swap_pct = log_memory_status(f"Batch {n_batches}")
+                if swap_pct > 10:
+                    logger.warning(f"High swap usage: {swap_pct:.1f}% - reducing batch size recommended")
+
         scheduler.step()
-        avg_loss  = epoch_loss  / n_batches
-        avg_dice  = epoch_dice  / n_batches
+        avg_loss = epoch_loss / n_batches
+        avg_dice = epoch_dice / n_batches
 
         logger.info(
-            f"Fold {fold} | Epoch {epoch+1}/{epochs} | "
+            f"Fold {fold} | Epoch {epoch + 1}/{epochs} | "
             f"Loss: {avg_loss:.4f} | Train Dice: {avg_dice:.4f} | "
             f"LR: {scheduler.get_last_lr()[0]:.2e}"
         )
@@ -264,15 +361,22 @@ def train_fold(
         if (epoch + 1) % val_freq == 0 or epoch == epochs - 1:
             model.eval()
             val_dice_scores = []
+
+            # Progress bar for validation
+            val_pbar = tqdm(val_loader, desc="Validation", unit="batch", leave=False)
+
             with torch.no_grad():
-                for batch in val_loader:
+                for batch in val_pbar:
                     images = batch["image"].to(device)
                     labels = batch["label"].to(device)
                     with torch.amp.autocast(device_type="cuda" if use_amp else "cpu", enabled=use_amp):
                         outputs = model(images)
                     preds = outputs.argmax(dim=1)
-                    dice  = dice_per_class(preds, labels, num_classes=4)
+                    dice = dice_per_class(preds, labels, num_classes=4)
                     val_dice_scores.append(dice)
+
+                    # Update validation progress bar
+                    val_pbar.set_postfix({"val_batches": len(val_dice_scores)})
 
             val_dice = np.mean(val_dice_scores, axis=0)
             # Mean over classes 1,2,3 (ignore background 0)
@@ -285,49 +389,91 @@ def train_fold(
 
             if val_dice_mean > best_val_dice:
                 best_val_dice = val_dice_mean
-                best_epoch     = epoch + 1
+                best_epoch = epoch + 1
                 torch.save(model.state_dict(), output_path)
-                logger.info(
-                    f"  ✅ New best model saved (Dice={val_dice_mean:.4f})"
-                )
+                # Also save full checkpoint for resuming
+                checkpoint_path = output_path.parent / f"checkpoint_epoch{epoch + 1}.pth"
+                save_checkpoint(model, optimizer, scheduler, epoch + 1, best_val_dice, best_epoch, checkpoint_path)
+                logger.info(f"  ✅ New best model saved (Dice={val_dice_mean:.4f})")
+                logger.info(f"  ✅ Checkpoint saved: {checkpoint_path}")
+                cleanup_old_checkpoints(output_path.parent, keep_last=2)
+            else:
+                # Save periodic checkpoint every 5 epochs
+                if (epoch + 1) % 5 == 0:
+                    checkpoint_path = output_path.parent / f"checkpoint_epoch{epoch + 1}.pth"
+                    save_checkpoint(model, optimizer, scheduler, epoch + 1, best_val_dice, best_epoch, checkpoint_path)
+                    logger.info(f"  💾 Checkpoint saved: {checkpoint_path}")
+                    cleanup_old_checkpoints(output_path.parent, keep_last=2)
 
-    logger.info(
-        f"Fold {fold} complete. Best Val Dice: {best_val_dice:.4f} at epoch {best_epoch}"
-    )
+            # ── Early stopping ───────────────────────────────────────────
+            epochs_since_best = (epoch + 1) - best_epoch
+            if epochs_since_best >= early_stop_patience:
+                logger.warning(
+                    f"  ⏹  Early stopping: no val-Dice improvement for "
+                    f"{epochs_since_best} epochs (patience={early_stop_patience}). "
+                    f"Best Dice {best_val_dice:.4f} at epoch {best_epoch}."
+                )
+                break
+
+    logger.info(f"Fold {fold} complete. Best Val Dice: {best_val_dice:.4f} at epoch {best_epoch}")
     return best_val_dice
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Train DynUNet on BraTS2021")
-    parser.add_argument("--data",        default=None,
-                        help="Path to BraTS2021_Training_Data folder")
-    parser.add_argument("--epochs",       type=int,   default=5,
-                        help="Number of training epochs (default: 5)")
-    parser.add_argument("--lr",          type=float, default=1e-4,
-                        help="Learning rate (default: 1e-4)")
-    parser.add_argument("--batch_size",   type=int,   default=1,
-                        help="Batch size (default: 1, keep 1 for 3D)")
-    parser.add_argument("--fold",        type=int,   default=0,
-                        help="Fold index for cross-validation (default: 0)")
-    parser.add_argument("--output",      default=None,
-                        help="Output weights path (default: models/brats_bundle/nnunet_weights.pth)")
-    parser.add_argument("--transfer",    default=None,
-                        help="Path to weights to transfer from (e.g. fold1_swin_unetr.pth)")
-    parser.add_argument("--max_train",  type=int, default=0,
-                        help="Max training cases to use (0 = all, for quick test use e.g. 100)")
+    parser.add_argument("--data", default=None, help="Path to BraTS2021_Training_Data folder")
+    parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs (default: 5)")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate (default: 1e-4)")
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=2,
+        help="Batch size (default: 2 for M4 Pro with 24GB RAM, use 1 if memory constrained)",
+    )
+    parser.add_argument("--fold", type=int, default=0, help="Fold index for cross-validation (default: 0)")
+    parser.add_argument(
+        "--output", default=None, help="Output weights path (default: models/brats_bundle/nnunet_weights.pth)"
+    )
+    parser.add_argument("--transfer", default=None, help="Path to weights to transfer from (e.g. fold1_swin_unetr.pth)")
+    parser.add_argument(
+        "--resume", default=None, help="Path to checkpoint to resume training from (e.g. checkpoint_epoch50.pth)"
+    )
+    parser.add_argument(
+        "--max_train", type=int, default=0, help="Max training cases to use (0 = all, for quick test use e.g. 100)"
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=10,
+        help="Early-stop patience: stop after N epochs without val-Dice improvement (default: 10)",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=4,
+        help="DataLoader worker processes (default: 4). 0 disables parallel loading.",
+    )
+    parser.add_argument(
+        "--val_freq", type=int, default=2, help="Validate every N epochs (default: 2; 1=every epoch, slower)"
+    )
     args = parser.parse_args()
 
     logger = setup_logging()
     device = get_device()
     logger.info(f"Device: {device}")
 
+    # Log initial memory status
+    log_memory_status("Training Start")
+
     # Paths
-    data_root = Path(args.data) if args.data else (
-        PROJECT_ROOT / "data" / "datasets" / "BraTS2021" / "raw" / "BraTS2021_Training_Data"
+    data_root = (
+        Path(args.data)
+        if args.data
+        else (PROJECT_ROOT / "data" / "datasets" / "BraTS2021" / "raw" / "BraTS2021_Training_Data")
     )
-    output_path = Path(args.output) if args.output else (
-        PROJECT_ROOT / "models" / "brats_bundle" / "nnunet_weights.pth"
+    output_path = (
+        Path(args.output) if args.output else (PROJECT_ROOT / "models" / "brats_bundle" / "nnunet_weights.pth")
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -343,34 +489,43 @@ def main():
     # Shuffle and split: 90% train, 10% val
     random.seed(42)
     random.shuffle(cases)
-    n_val  = max(1, int(0.1 * len(cases)))
+    n_val = max(1, int(0.1 * len(cases)))
     n_train = len(cases) - n_val
     train_cases = cases[:n_train]
-    val_cases   = cases[n_train:]
+    val_cases = cases[n_train:]
     if args.max_train > 0:
-        train_cases = train_cases[:args.max_train]
+        train_cases = train_cases[: args.max_train]
         logger.info(f"Limiting train to {args.max_train} cases (use --max_train 0 for full)")
     logger.info(f"Train: {len(train_cases)} | Val: {len(val_cases)}")
 
     # Create datasets
     train_ds = Dataset(train_cases, transform=get_train_transforms())
-    val_ds   = Dataset(val_cases,   transform=get_val_transforms())
+    val_ds = Dataset(val_cases, transform=get_val_transforms())
 
-    train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=0, collate_fn=brats_collate, pin_memory=(device.type == "cuda")
+    # Parallel data loading: workers run NIfTI I/O + transforms in separate
+    # processes so the GPU isn't idle between batches.  persistent_workers
+    # avoids the per-epoch worker spin-up cost.
+    _nw = max(0, int(args.num_workers))
+    _loader_kwargs = dict(
+        batch_size=args.batch_size,
+        num_workers=_nw,
+        pin_memory=(device.type == "cuda"),
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=0, collate_fn=val_collate, pin_memory=(device.type == "cuda")
-    )
+    if _nw > 0:
+        _loader_kwargs["persistent_workers"] = True
+        _loader_kwargs["prefetch_factor"] = 2
+    train_loader = DataLoader(train_ds, shuffle=True, collate_fn=brats_collate, **_loader_kwargs)
+    val_loader = DataLoader(val_ds, shuffle=False, collate_fn=val_collate, **_loader_kwargs)
 
     # Build model
     logger.info("Building DynUNet model...")
-    model = load_nnunet(device, {
-        "filters": [32, 64, 128, 256, 512],
-        "deep_supervision": False,
-    })
+    model = load_nnunet(
+        device,
+        {
+            "filters": [32, 64, 128, 256, 512],
+            "deep_supervision": False,
+        },
+    )
 
     # Transfer learning: load existing nnunet_weights if present
     transfer_path = args.transfer
@@ -387,11 +542,35 @@ def main():
 
     model = model.to(device)
 
+    # ── Checkpoint resuming (model state only at this point) ────────────
+    start_epoch = 0
+    start_best_val_dice = 0.0
+    start_best_epoch = 0
+    resume_path: Optional[Path] = None
+
+    if args.resume:
+        resume_path = Path(args.resume)
+        if not resume_path.exists():
+            logger.error(f"Checkpoint not found: {resume_path}")
+            sys.exit(1)
+        logger.info(f"Resuming from checkpoint: {resume_path}")
+        start_epoch, start_best_val_dice, start_best_epoch = load_checkpoint(resume_path, model, None, None, device)
+        logger.info(f"  Resuming from epoch {start_epoch}, best dice: {start_best_val_dice:.4f}")
+
+    # Create optimizer and scheduler now that the model is on device
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+
+    # If resuming, restore optimizer + scheduler state (model already loaded above)
+    if resume_path is not None:
+        load_checkpoint(resume_path, None, optimizer, scheduler, device)
+
     # Train
     logger.info(
         f"Starting training: {args.epochs} epochs | LR={args.lr} | "
-        f"BS={args.batch_size} | Fold={args.fold}"
+        f"BS={args.batch_size} | Fold={args.fold} | Start epoch: {start_epoch}"
     )
+
     best_dice = train_fold(
         model=model,
         train_loader=train_loader,
@@ -401,8 +580,14 @@ def main():
         lr=args.lr,
         logger=logger,
         output_path=output_path,
+        optimizer=optimizer,
+        scheduler=scheduler,
         fold=args.fold,
-        val_freq=1,
+        val_freq=max(1, args.val_freq),
+        start_epoch=start_epoch,
+        start_best_val_dice=start_best_val_dice,
+        start_best_epoch=start_best_epoch,
+        early_stop_patience=args.patience,
     )
 
     # Save training report

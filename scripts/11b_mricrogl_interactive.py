@@ -19,33 +19,37 @@ try:
 except ImportError:
     # Minimal fallback session loading if modular loader fails
     import json
+
     def get_session():
         sess_file = PROJECT_ROOT / "session.json"
         if sess_file.exists():
-            with open(sess_file, "r") as f: return json.load(f)
+            with open(sess_file, "r") as f:
+                return json.load(f)
         return {}
+
     def get_paths(sess):
         return {
             "monai_dir": PROJECT_ROOT / "results" / sess.get("session_id", "") / "nifti" / "monai_ready",
             "output_dir": PROJECT_ROOT / "results" / sess.get("session_id", ""),
-            "extra_dir": PROJECT_ROOT / "results" / sess.get("session_id", "") / "nifti" / "extra_sequences"
+            "extra_dir": PROJECT_ROOT / "results" / sess.get("session_id", "") / "nifti" / "extra_sequences",
         }
 
+
 def run():
-    print("\n" + "═"*60)
+    print("\n" + "═" * 60)
     print("  PY-BRAIN — MRIcroGL MASS EFFECT AUTO-SETUP")
-    print("═"*60)
+    print("═" * 60)
 
     sess = get_session()
     paths = get_paths(sess)
-    
+
     # Files
-    t1c  = paths["monai_dir"] / "t1c_resampled.nii.gz"
-    seg  = paths["output_dir"] / "segmentation_full.nii.gz"
-    
+    t1c = paths["monai_dir"] / "t1c_resampled.nii.gz"
+    seg = paths["output_dir"] / "segmentation_full.nii.gz"
+
     if not t1c.exists():
         t1c = paths["monai_dir"] / "t1.nii.gz"
-    
+
     if not seg.exists():
         print(f"  ❌ Erro: Segmentação não encontrada em {seg}")
         print("  Executa a Stage 3 primeiro.")
@@ -59,9 +63,10 @@ def run():
 
     # Create the MRIcroGL Python Script (Internal script for gl module)
     setup_script = paths["output_dir"] / "mricrogl_setup_mass_effect.py"
-    
+
     # Path conversions for MRIcroGL
-    def p(path): return str(path).replace("\\", "/")
+    def p(path):
+        return str(path).replace("\\", "/")
 
     gl_script = f"""import gl
 gl.resetdefaults()
@@ -81,15 +86,16 @@ print('PY-BRAIN: Mass Effect Setup Complete. Use the Clip tool to explore.')
         f.write(gl_script)
 
     print(f"  ✅ Configuração gerada: {setup_script.name}")
-    print(f"  🚀 Abrindo MRIcroGL com Anatomia + Tumor...")
-    
+    print("  🚀 Abrindo MRIcroGL com Anatomia + Tumor...")
+
     # Launch
     subprocess.Popen([str(mricrogl_app), str(setup_script)])
     print("\n  Instruções:")
     print("  1. Usa o Rato para rodar o cérebro.")
     print("  2. A ferramenta 'Clip' no painel lateral permite fazer os cortes.")
     print("  3. Observa como a cor alaranjada (tumor) desloca as estruturas pretas (ventrículos).")
-    print("═"*60 + "\n")
+    print("═" * 60 + "\n")
+
 
 if __name__ == "__main__":
     run()

@@ -9,9 +9,8 @@ Optimized for Mac Mini M1/MPS and CPU fallback.
 import gc
 import torch
 import numpy as np
-import inspect
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict
 from monai.networks.nets.dynunet import DynUNet
 from monai.inferers.utils import sliding_window_inference
 from pybrain.io.logging_utils import get_logger
@@ -43,26 +42,28 @@ def load_nnunet(device: torch.device, model_cfg: Optional[Dict] = None) -> torch
     """
     model_cfg = model_cfg or {}
 
-    # nnU-Net style configuration for brain MRI (1mm isotropic)
-    # Architecture MUST match the pretrained weights file.
-    # Current weights (nnunet_weights.pth) were trained with 3 encoder stages
-    # and filters [32, 64, 128].  To use a deeper architecture, retrain
-    # the model first and update both `filters` in defaults.yaml AND the
-    # weights file.
+    # nnU-Net style configuration for brain MRI (1mm isotropic).
+    # Architecture MUST match the pretrained weights file at
+    # models/brats_bundle/nnunet_weights.pth — verified by checkpoint
+    # introspection 2026-04-29:
+    #   input_block (32) → downsamples 0/1/2 (64, 128, 256) → bottleneck (512)
+    #   upsamples 0/1/2/3 (256, 128, 64, 32) → output_block (3 = WT/TC/ET)
+    # → 5-level DynUNet, filters=[32,64,128,256,512], strides=[1,2,2,2,2].
     #
-    # DynUNet requires: len(kernel_size) == len(strides) == len(filters)
-    filters = model_cfg.get("filters", [32, 64, 128])
+    # DynUNet requires: len(kernel_size) == len(strides) == len(filters);
+    # upsample_kernel_size has len(strides) - 1 entries (one per upsample).
+    filters = model_cfg.get("filters", [32, 64, 128, 256, 512])
     n_stages = len(filters)
 
     # Build kernel/stride lists matching the number of stages
     kernel_size = [[3, 3, 3]] * n_stages
-    strides     = [[1, 1, 1]] + [[2, 2, 2]] * (n_stages - 1)
-    upsample_ks = [[2, 2, 2]] * n_stages
+    strides = [[1, 1, 1]] + [[2, 2, 2]] * (n_stages - 1)
+    upsample_ks = [[2, 2, 2]] * (n_stages - 1)
 
     model = DynUNet(
         spatial_dims=3,
-        in_channels=4,                          # T1, T1c, T2, FLAIR
-        out_channels=3,                          # WT, TC, ET
+        in_channels=4,  # T1, T1c, T2, FLAIR
+        out_channels=3,  # WT, TC, ET
         kernel_size=kernel_size,
         strides=strides,
         upsample_kernel_size=upsample_ks,
@@ -73,16 +74,14 @@ def load_nnunet(device: torch.device, model_cfg: Optional[Dict] = None) -> torch
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"DynUNet: {total_params/1e6:.1f}M total params ({trainable/1e6:.1f}M trainable)")
+    logger.info(f"DynUNet: {total_params / 1e6:.1f}M total params ({trainable / 1e6:.1f}M trainable)")
 
     model.eval()
     return model
 
 
 def run_nnunet_inference(
-    input_tensor: torch.Tensor,
-    device: torch.device,
-    model_cfg: Optional[Dict] = None
+    input_tensor: torch.Tensor, device: torch.device, model_cfg: Optional[Dict] = None
 ) -> np.ndarray:
     """
     Run nnU-Net (DynUNet) inference using MONAI sliding window.
@@ -119,27 +118,13 @@ def run_nnunet_inference(
         if msg.unexpected_keys:
             logger.warning(f"DynUNet: {len(msg.unexpected_keys)} unexpected keys in checkpoint")
     else:
-        logger.error(
-            "=" * 60
-        )
-        logger.error(
-            "NNUNET WEIGHTS MISSING — MODEL RUNS ON RANDOM INITIALIZATION"
-        )
-        logger.error(
-            f"  Expected: {weights_path}"
-        )
-        logger.error(
-            "  All nnU-Net predictions will be RANDOM NOISE."
-        )
-        logger.error(
-            "  Set ensemble_weights.nnunet=0.0 in defaults.yaml until"
-        )
-        logger.error(
-            "  validated BraTS weights are placed at the path above."
-        )
-        logger.error(
-            "=" * 60
-        )
+        logger.error("=" * 60)
+        logger.error("NNUNET WEIGHTS MISSING — MODEL RUNS ON RANDOM INITIALIZATION")
+        logger.error(f"  Expected: {weights_path}")
+        logger.error("  All nnU-Net predictions will be RANDOM NOISE.")
+        logger.error("  Set ensemble_weights.nnunet=0.0 in defaults.yaml until")
+        logger.error("  validated BraTS weights are placed at the path above.")
+        logger.error("=" * 60)
 
     # INPUT CONTRACT: caller (preprocess_volumes) has already applied per-channel
     # z-score normalization.  Do NOT re-normalize here — double normalization
@@ -152,7 +137,7 @@ def run_nnunet_inference(
     # Sliding window inference
     roi_size = tuple(model_cfg.get("roi_size", [128, 128, 128]))
     overlap = model_cfg.get("overlap", 0.5)
-    
+
     logger.info(f"DynUNet: ROI size: {roi_size}, overlap: {overlap}")
 
     device_type = "cpu" if device.type == "cpu" else ("mps" if device.type == "mps" else "cuda")
@@ -167,9 +152,9 @@ def run_nnunet_inference(
                     sw_batch_size=1,
                     predictor=model,
                     overlap=overlap,
-                    mode="gaussian"
+                    mode="gaussian",
                 )
-            
+
             # Handle different output formats
             if isinstance(outputs, dict):
                 # Some models return dict
@@ -180,10 +165,10 @@ def run_nnunet_inference(
             else:
                 # Standard tensor output
                 output_tensor = outputs
-            
+
             # Apply sigmoid to convert logits to probabilities
             prob = torch.sigmoid(output_tensor).cpu().numpy().squeeze(0)
-            
+
             # Handle different output formats
             if prob.ndim == 5:  # (batch, channel, x, y, z)
                 prob = prob.squeeze(0)  # Remove batch dimension
@@ -201,7 +186,7 @@ def run_nnunet_inference(
                 logger.info(f"DynUNet: ROI mode - using correct orientation {prob.shape}")
             elif set(prob.shape[1:]) == set(expected_shape) and prob.shape[1:] != expected_shape:
                 # Spatial dims are a permutation of expected — find the right one
-                for perm in [(0,1,2,3), (0,3,2,1), (0,2,3,1), (0,3,1,2), (0,2,1,3), (0,1,3,2)]:
+                for perm in [(0, 1, 2, 3), (0, 3, 2, 1), (0, 2, 3, 1), (0, 3, 1, 2), (0, 2, 1, 3), (0, 1, 3, 2)]:
                     candidate = np.transpose(prob, perm)
                     if candidate.shape == (3,) + expected_shape:
                         prob = candidate
@@ -216,7 +201,7 @@ def run_nnunet_inference(
             if prob.ndim == 3:
                 prob = prob[np.newaxis, ...]
             logger.info(f"DynUNet: Standard mode - output shape {prob.shape}")
-            
+
         logger.info(f"DynUNet: Final prob shape: {prob.shape}")
 
         # NOTE: sigmoid already applied via torch.sigmoid() above (line ~160).

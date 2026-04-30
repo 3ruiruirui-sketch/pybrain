@@ -32,22 +32,23 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # ── Load session ──────────────────────────────────────────────────────────
-from scripts.session_loader import get_session, get_paths, get_patient  # type: ignore
+from scripts.session_loader import get_session, get_paths  # type: ignore
 
-sess   = get_session()
+sess = get_session()
 _paths = get_paths(sess)
 
 # ── All paths derived from session ────────────────────────────────────────
-OUTPUT_DIR  = _paths["output_dir"]
-NIFTI_DIR   = _paths["nifti_dir"]
-MONAI_DIR   = _paths["monai_dir"]
-EXTRA_DIR   = _paths["extra_dir"]
+OUTPUT_DIR = _paths["output_dir"]
+NIFTI_DIR = _paths["nifti_dir"]
+MONAI_DIR = _paths["monai_dir"]
+EXTRA_DIR = _paths["extra_dir"]
 RESULTS_DIR = _paths["results_dir"]
-WORK_DIR    = NIFTI_DIR / "ct_work"
+WORK_DIR = NIFTI_DIR / "ct_work"
 
 # CT DICOM source — from session assignments
-ASSIGNMENTS  = sess.get("assignments", {})
+ASSIGNMENTS = sess.get("assignments", {})
 SERIES_PATHS = {k: Path(v) for k, v in sess.get("series_paths", {}).items()}
+
 
 # Remap any stale paths by searching inside PROJECT_ROOT
 def _remap_series_paths(series_paths: dict) -> dict:
@@ -68,29 +69,115 @@ def _remap_series_paths(series_paths: dict) -> dict:
                 print(f"  ℹ️  Remapped: {name}")
     return fixed
 
+
 SERIES_PATHS = _remap_series_paths(SERIES_PATHS)
 
 # Build CT_DIR from the CT assignment in session
-_ct_role    = ASSIGNMENTS.get("CT") or ASSIGNMENTS.get("CT_bone")
-_ct_path    = SERIES_PATHS.get(_ct_role) if _ct_role else None
-CT_DIR      = Path(_ct_path).parent if _ct_path else None
+_ct_role = ASSIGNMENTS.get("CT") or ASSIGNMENTS.get("CT_bone")
+_ct_path = SERIES_PATHS.get(_ct_role) if _ct_role else None
+CT_DIR = Path(_ct_path).parent if _ct_path else None
 
 # MRI reference
-MRI_DIR     = MONAI_DIR
+MRI_DIR = MONAI_DIR
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# STANDALONE MERGE MODE — Stage 2b (Early Exit)
+# ─────────────────────────────────────────────────────────────────────────
+def _run_merge_only(sess, paths):
+    """Stage 2b: Merge pre-computed CT masks into AI segmentation."""
+    from scipy.ndimage import zoom as scipy_zoom
+
+    def banner(msg):
+        print("\n" + "═" * 65)
+        print(f"  {msg}")
+        print("═" * 65)
+
+    banner("STAGE 2b — CT → MRI SEGMENTATION MERGE (Standalone)")
+
+    _out_dir = Path(paths["output_dir"])
+    _monai_dir = Path(paths["monai_dir"])
+
+    # Load pre-computed CT masks from Stage 2 output
+    ct_reg_path = _out_dir / "ct_brain_registered.nii.gz"
+    calc_path = _out_dir / "ct_calcification.nii.gz"
+    haem_path = _out_dir / "ct_haemorrhage.nii.gz"
+    seg_names = ["segmentation_full.nii.gz", "segmentation_ensemble.nii.gz"]
+    seg_path = None
+    for n in seg_names:
+        p = _out_dir / n
+        if p.exists():
+            seg_path = p
+            break
+
+    if not seg_path:
+        print("  ❌ No AI segmentation found in output folder.")
+        print("     Run Stage 3 first: python run_pipeline.py")
+        sys.exit(1)
+    if not ct_reg_path.exists() or not calc_path.exists():
+        print("  ❌ CT masks from Stage 2 not found.")
+        print("     Re-run Stage 2 before Stage 2b.")
+        sys.exit(1)
+
+    print(f"  Base segmentation : {seg_path.name}")
+    print(f"  CT registration   : {ct_reg_path.name}")
+
+    # Load CT mask arrays
+    ct_itk = sitk.ReadImage(str(ct_reg_path), sitk.sitkFloat32)
+    ct_arr = np.transpose(sitk.GetArrayFromImage(ct_itk), (2, 1, 0)).astype(np.float32)
+    calc_arr = nib.load(str(calc_path)).get_fdata().astype(np.float32)
+    haem_arr = nib.load(str(haem_path)).get_fdata().astype(np.float32)
+
+    seg_nib = nib.load(str(seg_path))
+    seg_arr = seg_nib.get_fdata().astype(np.uint8)
+    affine = seg_nib.affine
+
+    # Resample CT masks to segmentation space if needed
+    if ct_arr.shape != seg_arr.shape:
+        factors = np.array(seg_arr.shape) / np.array(ct_arr.shape)
+        scipy_zoom(ct_arr, factors, order=1)
+        calc_rs = scipy_zoom(calc_arr, factors, order=0)
+        haem_rs = scipy_zoom(haem_arr, factors, order=0)
+        print(f"  ℹ️  CT resampled to segmentation grid: {seg_arr.shape}")
+    else:
+        calc_rs = calc_arr
+        haem_rs = haem_arr
+
+    # Execute merge: CT calcification/hemorrhage overrides MRI segmentation
+    merged = seg_arr.copy()
+    calc_mask = (calc_rs > 0).astype(bool)
+    haem_near = (haem_rs > 0) & ndimage.binary_dilation((seg_arr > 0), iterations=5)
+    merged[calc_mask] = 1
+    merged[haem_near] = 1
+
+    m_path = _out_dir / "segmentation_ct_merged.nii.gz"
+    nib.save(nib.Nifti1Image(merged.astype(np.uint8), affine), str(m_path))
+    print(f"  ✅ Merge complete → {m_path.name}")
+    banner("STAGE 2b COMPLETE")
+
+
+if "--merge-only" in sys.argv or os.environ.get("PYBRAIN_MERGE_ONLY") == "1":
+    _run_merge_only(sess, _paths)
+    sys.exit(0)
+
+# ─────────────────────────────────────────────────────────────────────────
+# MAIN STAGE 2 EXECUTION (CT Conversion + Registration)
+# ─────────────────────────────────────────────────────────────────────────
 
 # Create working directories
 EXTRA_DIR.mkdir(parents=True, exist_ok=True)
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
 # CT Hounsfield Unit thresholds
-HU_CALCIFICATION_LOW  = 130
+HU_CALCIFICATION_LOW = 130
 HU_CALCIFICATION_HIGH = 1000
-HU_HAEMORRHAGE_LOW    = 50
-HU_HAEMORRHAGE_HIGH   = 90
-HU_TUMOUR_LOW         = 25
-HU_TUMOUR_HIGH        = 60
+HU_HAEMORRHAGE_LOW = 50
+HU_HAEMORRHAGE_HIGH = 90
+HU_TUMOUR_LOW = 25
+HU_TUMOUR_HIGH = 60
 
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def banner(t):
     print("\n" + "═" * 65)
@@ -171,7 +258,9 @@ for stem, ct_path in ct_nifti.items():
     print(f"  Registering {stem}…")
     ct_raw = sitk.ReadImage(str(ct_path), sitk.sitkFloat32)
     try:
-        initial_tx = sitk.CenteredTransformInitializer(t1_ref, ct_raw, sitk.Euler3DTransform(), sitk.CenteredTransformInitializerFilter.GEOMETRY)
+        initial_tx = sitk.CenteredTransformInitializer(
+            t1_ref, ct_raw, sitk.Euler3DTransform(), sitk.CenteredTransformInitializerFilter.GEOMETRY
+        )
     except RuntimeError:
         initial_tx = sitk.Euler3DTransform()
 
@@ -184,8 +273,7 @@ for stem, ct_path in ct_nifti.items():
     reg.SetSmoothingSigmasPerLevel([2, 1, 0])
     reg.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     reg.SetOptimizerAsGradientDescent(
-        learningRate=1.0, numberOfIterations=300,
-        convergenceMinimumValue=1e-6, convergenceWindowSize=10
+        learningRate=1.0, numberOfIterations=300, convergenceMinimumValue=1e-6, convergenceWindowSize=10
     )
     reg.SetOptimizerScalesFromPhysicalShift()
 
@@ -195,27 +283,24 @@ for stem, ct_path in ct_nifti.items():
         out_path = WORK_DIR / f"{stem}_registered.nii.gz"
         sitk.WriteImage(ct_resampled, str(out_path))
         ct_registered[stem] = out_path
-        print(f"    ✅ Registration complete")
+        print("    ✅ Registration complete")
     except Exception as e:
         print(f"    ❌ Registration failed for {stem}: {e}")
         # F8: Propagate flag to session so downstream stages know about the misalignment
         try:
             session_file = os.environ.get("PYBRAIN_SESSION")
             if session_file and Path(session_file).exists():
-                with open(session_file, 'r') as f:
+                with open(session_file, "r") as f:
                     session_data = json.load(f)
-                
+
                 # Add registration status to session
                 registration_status = session_data.get("registration_status", {})
-                registration_status[stem] = {
-                    "success": False,
-                    "error": str(e)
-                }
+                registration_status[stem] = {"success": False, "error": str(e)}
                 session_data["registration_status"] = registration_status
-                
-                with open(session_file, 'w') as f:
+
+                with open(session_file, "w") as f:
                     json.dump(session_data, f, indent=2)
-                print(f"    ℹ️  Registration failure flag saved to session.")
+                print("    ℹ️  Registration failure flag saved to session.")
         except Exception as json_err:
             print(f"    ⚠️  Could not update session JSON: {json_err}")
 
@@ -235,10 +320,12 @@ ct_arr = np.transpose(sitk.GetArrayFromImage(ct_img), (2, 1, 0)).astype(np.float
 t1_nib = nib.load(str(t1_path))
 affine = t1_nib.affine
 
+
 def save_mask(arr, fname, description):
     nib.save(nib.Nifti1Image(arr.astype(np.float32), affine), str(OUTPUT_DIR / fname))
     vol = (arr > 0).sum() / 1000.0
     print(f"  ✅ {description:35s} {vol:6.1f} cc  → {fname}")
+
 
 calc_raw = ((ct_arr >= HU_CALCIFICATION_LOW) & (ct_arr <= HU_CALCIFICATION_HIGH)).astype(np.float32)
 
@@ -259,6 +346,7 @@ if brain_mask_path.exists():
         print("     Resampling brain mask to CT grid using scipy.ndimage.zoom...")
         try:
             from scipy.ndimage import zoom as scipy_zoom
+
             # Calculate zoom factors per dimension
             factors = np.array(calc_raw.shape) / np.array(bm_arr.shape)
             bm_for_ct = scipy_zoom(bm_arr, factors, order=0).clip(0, 1)  # nearest-neighbour for mask
@@ -269,17 +357,71 @@ else:
     print("  ⚠️  WARNING: brain_mask.nii.gz not found.")
     print("     Skull-stripping is inactive — calcification volumes may be inflated by bone/teeth.")
 
+# Apply brain mask to calcification BEFORE cleanup
+if bm_for_ct is not None:
+    calc_raw *= bm_for_ct
+
+# ── Spatial filtering: exclude physiological calcifications ──────────────────
+# Load FLAIR to identify tumor/edema regions (high signal)
+flair_path = MONAI_DIR / "flair.nii.gz"
+tumor_region_mask = None
+if flair_path.exists():
+    try:
+        flair_img = nib.load(str(flair_path))
+        flair_data = flair_img.get_fdata()
+
+        # Normalize FLAIR intensities
+        p2, p98 = np.percentile(flair_data[flair_data > 0], [2, 98])
+        flair_norm = np.clip((flair_data - p2) / (p98 - p2 + 1e-8), 0, 1)
+
+        # High FLAIR signal = potential tumor/edema (threshold at 75th percentile)
+        high_signal = flair_norm > 0.60
+
+        # Dilate tumor region by 30mm to capture nearby calcifications
+        # (30mm = ~30 voxels at 1mm resolution)
+        tumor_region_dilated = ndimage.binary_dilation(high_signal, iterations=30)
+
+        # Resample tumor mask to CT space if shapes don't match
+        if tumor_region_dilated.shape != calc_raw.shape:
+            from scipy.ndimage import zoom as scipy_zoom
+
+            factors = np.array(calc_raw.shape) / np.array(tumor_region_dilated.shape)
+            tumor_region_mask = scipy_zoom(tumor_region_dilated.astype(np.float32), factors, order=0) > 0.5
+            print(f"  ℹ️  Tumor region mask resampled: {tumor_region_dilated.shape} → {tumor_region_mask.shape}")
+        else:
+            tumor_region_mask = tumor_region_dilated
+
+        print("  ℹ️  Tumor region mask created from FLAIR (dilated 30mm)")
+    except Exception as e:
+        print(f"  ⚠️  Could not load FLAIR for spatial filtering: {e}")
+
 # Cleanup calcification mask
 labeled, n = ndimage.label(calc_raw)
 if n > 0:
     sizes = ndimage.sum(calc_raw, labeled, range(1, n + 1))
     calc_clean = np.zeros_like(calc_raw)
     for i, sz in enumerate(sizes):
-        if sz >= 5: calc_clean[labeled == (i+1)] = 1.0
+        if sz >= 5:
+            component_mask = labeled == (i + 1)
+
+            # If tumor region mask exists, only keep calcifications near tumor
+            if tumor_region_mask is not None:
+                overlap = np.sum(component_mask & tumor_region_mask)
+                if overlap > 0:  # At least some overlap with tumor region
+                    calc_clean[component_mask] = 1.0
+                else:
+                    print(f"  🗑️  Excluded calcification component {i + 1} (isolated, {sz:.0f} voxels)")
+            else:
+                # No FLAIR available — keep all calcifications (fallback)
+                calc_clean[component_mask] = 1.0
 else:
     calc_clean = calc_raw
 
-save_mask(calc_clean, "ct_calcification.nii.gz", "Calcifications (HU 130–1000)")
+save_mask(calc_clean, "ct_calcification.nii.gz", "Calcifications (HU 130–1000, tumor-proximal)")
+
+# Note: thick-slice CT (>5mm) over-estimates calcification volume proportionally.
+# A 25mm-slice CT showing 438cc may correspond to ~17cc on 1mm CT.
+# The non_gbm_ct_calc_threshold in config must account for this.
 
 haem_raw = ((ct_arr >= HU_HAEMORRHAGE_LOW) & (ct_arr <= HU_HAEMORRHAGE_HIGH)).astype(np.float32)
 if bm_for_ct is not None:
@@ -290,7 +432,8 @@ if n > 0:
     sizes = ndimage.sum(haem_raw, labeled, range(1, n + 1))
     haem_clean = np.zeros_like(haem_raw)
     for i, sz in enumerate(sizes):
-        if sz >= 10: haem_clean[labeled == (i+1)] = 1.0
+        if sz >= 10:
+            haem_clean[labeled == (i + 1)] = 1.0
 else:
     haem_clean = haem_raw
 
@@ -314,11 +457,7 @@ shutil.copy2(str(_ct_reg), str(MONAI_DIR / "ct_brain_registered.nii.gz"))
 banner("STEP 4 — MERGING CT + MRI SEGMENTATION")
 
 # Load segmentation from current session output directory
-target_names = [
-    "segmentation_full.nii.gz",
-    "segmentation_ensemble.nii.gz",
-    "segmentation_ct_merged.nii.gz"
-]
+target_names = ["segmentation_full.nii.gz", "segmentation_ensemble.nii.gz", "segmentation_ct_merged.nii.gz"]
 latest_seg = None
 for name in target_names:
     p = OUTPUT_DIR / name
@@ -327,10 +466,10 @@ for name in target_names:
         break
 
 if not latest_seg:
-    print(f"  ℹ️  No AI segmentation in output folder yet.")
-    print(f"     This is normal when Stage 2 runs before Stage 3 (default pipeline order).")
-    print(f"     Merge is skipped — CT-derived masks are still saved. After Stage 3 finishes,")
-    print(f"     re-run Stage 2 to write segmentation_ct_merged.nii.gz, or merge in an external tool.")
+    print("  ℹ️  No AI segmentation in output folder yet.")
+    print("     This is normal when Stage 2 runs before Stage 3 (default pipeline order).")
+    print("     Merge is skipped — CT-derived masks are still saved. After Stage 3 finishes,")
+    print("     re-run Stage 2 to write segmentation_ct_merged.nii.gz, or merge in an external tool.")
     merged = np.zeros_like(ct_arr, dtype=np.uint8)
 else:
     print(f"  Using base segmentation: {latest_seg.name}")
@@ -348,6 +487,7 @@ else:
             print(f"  ⚠️  Shape mismatch: CT {ct_arr.shape} vs SEG {seg_arr.shape} — attempting resample")
             try:
                 from scipy.ndimage import zoom as scipy_zoom
+
                 factors = np.array(seg_arr.shape) / np.array(ct_arr.shape)
                 ct_for_merge = scipy_zoom(ct_arr, factors, order=1)
                 # Resample calc_clean and haem_clean too — they are on original ct_arr grid
@@ -371,7 +511,7 @@ else:
             calc_mask = (calc_for_merge > 0).astype(bool)
             merged[calc_mask] = 1
             # Hemorragia perto do tumor também é integrada no núcleo
-            haem_near = ((haem_for_merge > 0) & ndimage.binary_dilation((seg_arr > 0), iterations=5))
+            haem_near = (haem_for_merge > 0) & ndimage.binary_dilation((seg_arr > 0), iterations=5)
             merged[haem_near] = 1
             m_path = OUTPUT_DIR / "segmentation_ct_merged.nii.gz"
             nib.save(nib.Nifti1Image(merged, seg_nib.affine), str(m_path))
@@ -416,78 +556,3 @@ for p in NIFTI_DIR.rglob("*.nii"):
 print("═" * 65)
 print("  ✅  Done!")
 print("═" * 65)
-
-
-# ─────────────────────────────────────────────────────────────────
-# STANDALONE MERGE MODE — Stage 2b
-# Runs independently after Stage 3 to merge CT masks into the
-# segmentation produced by the AI model.
-# Usage: python 2_ct_integration.py --merge-only
-# ─────────────────────────────────────────────────────────────────
-if "--merge-only" in sys.argv or os.environ.get("PYBRAIN_MERGE_ONLY") == "1":
-    banner("STAGE 2b — CT → MRI SEGMENTATION MERGE (Standalone)")
-    # Re-load paths — session is already set by the imports above
-    from scripts.session_loader import get_session, get_paths
-    _sess = get_session()
-    _paths = get_paths(_sess)
-    _out_dir = Path(_paths["output_dir"])
-    _monai_dir = Path(_paths["monai_dir"])
-
-    # Load pre-computed CT masks from Stage 2 output
-    ct_reg_path = _out_dir / "ct_brain_registered.nii.gz"
-    calc_path   = _out_dir / "ct_calcification.nii.gz"
-    haem_path   = _out_dir / "ct_haemorrhage.nii.gz"
-    seg_names   = ["segmentation_full.nii.gz", "segmentation_ensemble.nii.gz"]
-    seg_path    = None
-    for n in seg_names:
-        p = _out_dir / n
-        if p.exists():
-            seg_path = p
-            break
-
-    if not seg_path:
-        print("  ❌ No AI segmentation found in output folder.")
-        print("     Run Stage 3 first: python run_pipeline.py")
-        sys.exit(1)
-    if not ct_reg_path.exists() or not calc_path.exists():
-        print("  ❌ CT masks from Stage 2 not found.")
-        print("     Re-run Stage 2 before Stage 2b.")
-        sys.exit(1)
-
-    print(f"  Base segmentation : {seg_path.name}")
-    print(f"  CT registration   : {ct_reg_path.name}")
-
-    # Load CT mask arrays (same I/O pattern as main Stage 2 code above)
-    ct_itk = sitk.ReadImage(str(ct_reg_path), sitk.sitkFloat32)
-    ct_arr = np.transpose(sitk.GetArrayFromImage(ct_itk), (2, 1, 0)).astype(np.float32)
-    calc_arr = nib.load(str(calc_path)).get_fdata().astype(np.float32)
-    haem_arr = nib.load(str(haem_path)).get_fdata().astype(np.float32)
-
-    seg_nib = nib.load(str(seg_path))
-    seg_arr = seg_nib.get_fdata().astype(np.uint8)
-    affine  = seg_nib.affine
-
-    # Resample CT masks to segmentation space if needed
-    if ct_arr.shape != seg_arr.shape:
-        from scipy.ndimage import zoom as scipy_zoom
-        factors = np.array(seg_arr.shape) / np.array(ct_arr.shape)
-        ct_rs   = scipy_zoom(ct_arr, factors, order=1)
-        calc_rs = scipy_zoom(calc_arr, factors, order=0)
-        haem_rs = scipy_zoom(haem_arr, factors, order=0)
-        print(f"  ℹ️  CT resampled to segmentation grid: {seg_arr.shape}")
-    else:
-        ct_rs   = ct_arr
-        calc_rs = calc_arr
-        haem_rs = haem_arr
-
-    # Execute merge: CT calcification/hemorrhage overrides MRI segmentation
-    merged = seg_arr.copy()
-    calc_mask  = (calc_rs > 0).astype(bool)
-    haem_near  = ((haem_rs > 0) & ndimage.binary_dilation((seg_arr > 0), iterations=5))
-    merged[calc_mask]  = 1
-    merged[haem_near] = 1
-
-    m_path = _out_dir / "segmentation_ct_merged.nii.gz"
-    nib.save(nib.Nifti1Image(merged.astype(np.uint8), affine), str(m_path))
-    print(f"  ✅ Merge complete → {m_path.name}")
-    sys.exit(0)

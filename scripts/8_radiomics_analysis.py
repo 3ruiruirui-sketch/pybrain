@@ -28,29 +28,30 @@ import json
 import warnings
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, cast
 
 # ── pybrain Imports ───────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
-    from pybrain.io.session import get_session, get_paths, get_patient # type: ignore
-    from pybrain.io.config import get_config # type: ignore
-    from pybrain.io.logging_utils import setup_logging # type: ignore
-    
+    from pybrain.io.session import get_session, get_paths, get_patient  # type: ignore
+    from pybrain.io.config import get_config  # type: ignore
+    from pybrain.io.logging_utils import setup_logging  # type: ignore
+
     _sess = get_session()
     _paths = get_paths(_sess)
     _config = get_config()
     PATIENT = get_patient(_sess)
-    
+
     OUTPUT_DIR = _paths["output_dir"]
     MONAI_DIR = _paths["monai_dir"]
     RESULTS_DIR = _paths["results_dir"]
     EXTRA_DIR = _paths["extra_dir"]
-    
+
     logger = setup_logging(OUTPUT_DIR)
     logger.info("Stage 8 — Radiomics Analysis — Initialized")
-    
-    import torch # type: ignore
+
+    import torch  # type: ignore
+
     DEVICE = torch.device(_config["hardware"]["device"])
     logger.info(f"Using device: {DEVICE}")
 
@@ -60,7 +61,9 @@ except Exception as e:
 # ─────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*torch.meshgrid.*")
 
 # ─────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────
@@ -68,9 +71,10 @@ warnings.filterwarnings("ignore")
 # ─────────────────────────────────────────────────────────────────────────
 
 RESULTS_BASE = RESULTS_DIR
-MRI_DIR      = Path(str(MONAI_DIR))
-EXTRA_DIR    = Path(str(EXTRA_DIR))
+MRI_DIR = Path(str(MONAI_DIR))
+EXTRA_DIR = Path(str(EXTRA_DIR))
 # OUTPUT_DIR is defined above from session _paths["output_dir"]
+
 
 def banner(t):
     print("\n" + "═" * 65)
@@ -92,8 +96,9 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    import radiomics # type: ignore
-    from radiomics import featureinspector, getFeatureClasses # type: ignore
+    import radiomics  # type: ignore
+    from radiomics import featureinspector, getFeatureClasses  # type: ignore
+
     HAS_PYRADIOMICS = True
     print("✅ PyRadiomics available — full 107 clinical features enabled")
 except ImportError:
@@ -104,6 +109,7 @@ HAS_SKIMAGE = False
 try:
     from skimage.feature import graycomatrix, graycoprops  # type: ignore
     from skimage.exposure import rescale_intensity  # type: ignore
+
     HAS_SKIMAGE = True
     if not HAS_PYRADIOMICS:
         print("✅ scikit-image available — GLCM texture features enabled")
@@ -115,6 +121,7 @@ HAS_SKLEARN = False
 try:
     from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier  # type: ignore
     from sklearn.preprocessing import StandardScaler  # type: ignore
+
     HAS_SKLEARN = True
     print("✅ scikit-learn available")
 except ImportError:
@@ -124,10 +131,12 @@ except ImportError:
 HAS_MONAI = False
 HAS_PYTORCH = False
 try:
-    import torch # type: ignore
+    import torch  # type: ignore
+
     HAS_PYTORCH = True
-    import monai # type: ignore
-    from monai.networks.nets import DenseNet121 # type: ignore
+    import monai  # type: ignore
+    from monai.networks.nets import DenseNet121  # type: ignore
+
     HAS_MONAI = True
     print("✅ MONAI Deep Learning available — 2.5D CNN Path enabled (MPS accelerated)")
 except ImportError:
@@ -151,16 +160,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 def _extract_centroid(mask_bool: np.ndarray, vox_sizes: tuple = (1.0, 1.0, 1.0)) -> np.ndarray:
     """Return (x, y, z) centroid of the largest lesion component (ignoring noise <1cc)."""
     from scipy.ndimage import label  # type: ignore
-    
+
     labeled_mask, num_features = label(mask_bool)
     if num_features == 0:
         return np.array([s // 2 for s in mask_bool.shape])
-        
+
     # Filter by size: 0.5cc = 500mm3 (to preserve secondary 1cm lesions)
     vox_vol_mm3 = float(np.prod(vox_sizes))
-    cc_threshold = 500.0 / vox_vol_mm3  
+    cc_threshold = 500.0 / vox_vol_mm3
     sizes = np.bincount(labeled_mask.ravel())
-    
+
     if len(sizes) > 1:
         # Filtrar componentes menores que 0.5cc
         valid = np.where(sizes[1:] >= cc_threshold)[0] + 1
@@ -182,7 +191,7 @@ def _make_3d_patch(
     """Extract a 4-channel 3D patch centered at `centroid`."""
     modalities = ["T1", "T1c", "T2", "FLAIR"]
     channels = []
-    
+
     # centroid = (c_x, c_y, c_z)
     for mod in modalities:
         if mod not in volumes:
@@ -194,22 +203,22 @@ def _make_3d_patch(
         pad_y = max(0, target_size - vol.shape[1])
         pad_z = max(0, target_size - vol.shape[2])
         if pad_x > 0 or pad_y > 0 or pad_z > 0:
-            vol = np.pad(vol, ((0, pad_x), (0, pad_y), (0, pad_z)), mode='constant')
-            
+            vol = np.pad(vol, ((0, pad_x), (0, pad_y), (0, pad_z)), mode="constant")
+
         x, y, z = centroid
         x_start = max(0, min(int(x - target_size // 2), vol.shape[0] - target_size))
         y_start = max(0, min(int(y - target_size // 2), vol.shape[1] - target_size))
         z_start = max(0, min(int(z - target_size // 2), vol.shape[2] - target_size))
-        
-        patch = vol[x_start:x_start+target_size, y_start:y_start+target_size, z_start:z_start+target_size]
+
+        patch = vol[x_start : x_start + target_size, y_start : y_start + target_size, z_start : z_start + target_size]
         channels.append(patch.astype(np.float32))
-        
+
     return np.stack(channels, axis=0)
 
 
 def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path) -> dict:
     """
-    SwinUNETR 3D: extract deep features directly from the Shifted Window 
+    SwinUNETR 3D: extract deep features directly from the Shifted Window
     transformer bottleneck (encoder10) via a 3D center patch.
     """
     if not HAS_MONAI or not HAS_PYTORCH:
@@ -221,7 +230,7 @@ def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path
 
     t0 = time.time()
     result: dict = {"cnn_method": "3D_SwinUNETR_Bottleneck"}
-    
+
     # Try loading pre-calculated features from Stage 3
     precalc_path = result_dir / "cnn_deep_features.npy"
     if not precalc_path.exists():
@@ -232,19 +241,19 @@ def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path
         fused_vec = np.load(str(precalc_path))
         result["cnn_deep_feature_size"] = len(fused_vec)
         result["cnn_deep_features"] = fused_vec  # preserve for XGBoost
-        result["cnn_grade_low_prob"] = 0.0 # fallback
+        result["cnn_grade_low_prob"] = 0.0  # fallback
         result["cnn_grade_high_prob"] = None  # not computed — features loaded from cache
-        result["cnn_gbm_prob"] = None         # not computed — features loaded from cache
+        result["cnn_gbm_prob"] = None  # not computed — features loaded from cache
         print(f"    Extracted deep bottleneck: {len(fused_vec)} dimensions")
-        print(f"    Feature Load time: {time.time()-t0:.2f}s")
+        print(f"    Feature Load time: {time.time() - t0:.2f}s")
         return result
 
     # Pass vox_sizes for 1cc volume filtering logic
     centroid = _extract_centroid(mask_bool, vox_sizes)
     print(f"    Tumour centroid: ({centroid[0]}, {centroid[1]}, {centroid[2]})")
-    
+
     # SwinUNETR 3D must run on CPU if fallback is active
-    device = torch.device('cpu')
+    device = torch.device("cpu")
     print(f"    Device: {device} (SwinUNETR 3D)")
 
     model = SwinUNETR(
@@ -257,7 +266,7 @@ def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path
 
     patch_3d = _make_3d_patch(volumes, centroid, target_size=96)
     tensor = torch.from_numpy(patch_3d).unsqueeze(0).float()
-    
+
     # Normalize per channel
     for c in range(4):
         c_min, c_max = tensor[0, c].min(), tensor[0, c].max()
@@ -265,8 +274,9 @@ def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path
             tensor[0, c] = (tensor[0, c] - c_min) / (c_max - c_min)
 
     tensor = tensor.to(device)
-    
+
     _feats: list = []
+
     def _hook(mod, inp, out):  # type: ignore
         # pooled bottleneck output [1, 768, 3, 3, 3] -> [768]
         pooled = torch.mean(out, dim=[2, 3, 4]).squeeze().detach().cpu().numpy()
@@ -278,12 +288,11 @@ def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path
     except AttributeError:
         pass
 
-    import traceback
     try:
         with torch.no_grad():
             logits = model(tensor)
             # Dummy softmax for backwards compatibility until we port bundle weights
-            probs = torch.softmax(torch.mean(logits, dim=[2,3,4]), dim=1).cpu().numpy()[0]
+            probs = torch.softmax(torch.mean(logits, dim=[2, 3, 4]), dim=1).cpu().numpy()[0]
     except Exception as e:
         print(f"    ⚠️ Inference failed on {device}: {e}")
         probs = np.array([0.0, 0.5, 0.5])
@@ -314,55 +323,53 @@ def run_2d5_cnn_inference(volumes: dict, mask_bool: np.ndarray, result_dir: Path
 # BUILT-IN FEATURE EXTRACTION (no PyRadiomics needed)
 # ─────────────────────────────────────────────────────────────────────────
 
-def extract_intensity_features(vol_arr: np.ndarray,
-                                mask_bool: np.ndarray,
-                                name: str) -> dict:
+
+def extract_intensity_features(vol_arr: np.ndarray, mask_bool: np.ndarray, name: str) -> dict:
     """Extract intensity statistics from a volume inside a mask."""
     vals = vol_arr[mask_bool].astype(float)
     if len(vals) == 0:
         return {}
 
-    p10, p25, p50, p75, p90 = np.percentile(vals, [10,25,50,75,90])
+    p10, p25, p50, p75, p90 = np.percentile(vals, [10, 25, 50, 75, 90])
 
     return {
-        f"{name}_mean":        float(np.mean(vals)),
-        f"{name}_std":         float(np.std(vals)),
-        f"{name}_min":         float(np.min(vals)),
-        f"{name}_max":         float(np.max(vals)),
-        f"{name}_median":      float(p50),
-        f"{name}_p10":         float(p10),
-        f"{name}_p90":         float(p90),
-        f"{name}_iqr":         float(p75 - p25),
-        f"{name}_skewness":    float(skew(vals)),
-        f"{name}_kurtosis":    float(kurtosis(vals)),
-        f"{name}_energy":      float(np.sum(vals ** 2)),
-        f"{name}_entropy":     float(_entropy(vals)),
-        f"{name}_range":       float(np.max(vals) - np.min(vals)),
-        f"{name}_cv":          float(np.std(vals) / (np.mean(vals) + 1e-8)),
+        f"{name}_mean": float(np.mean(vals)),
+        f"{name}_std": float(np.std(vals)),
+        f"{name}_min": float(np.min(vals)),
+        f"{name}_max": float(np.max(vals)),
+        f"{name}_median": float(p50),
+        f"{name}_p10": float(p10),
+        f"{name}_p90": float(p90),
+        f"{name}_iqr": float(p75 - p25),
+        f"{name}_skewness": float(skew(vals)),
+        f"{name}_kurtosis": float(kurtosis(vals)),
+        f"{name}_energy": float(np.sum(vals**2)),
+        f"{name}_entropy": float(_entropy(vals)),
+        f"{name}_range": float(np.max(vals) - np.min(vals)),
+        f"{name}_cv": float(np.std(vals) / (np.mean(vals) + 1e-8)),
     }
 
 
 def _entropy(vals: np.ndarray, bins: int = 64) -> float:
     """Shannon entropy of intensity histogram."""
     hist, _ = np.histogram(vals, bins=bins)
-    hist    = hist[hist > 0].astype(float)
-    hist   /= hist.sum()
+    hist = hist[hist > 0].astype(float)
+    hist /= hist.sum()
     return float(-np.sum(hist * np.log2(hist + 1e-12)))
 
 
-def extract_shape_features(mask_bool: np.ndarray,
-                            vox_sizes: tuple) -> dict:
+def extract_shape_features(mask_bool: np.ndarray, vox_sizes: tuple) -> dict:
     """Extract 3D shape features from binary mask."""
     vox_mm3 = float(vox_sizes[0] * vox_sizes[1] * vox_sizes[2])
-    n_vox   = int(mask_bool.sum())
+    n_vox = int(mask_bool.sum())
     vol_mm3 = n_vox * vox_mm3
-    vol_cc  = vol_mm3 / 1000.0
+    vol_cc = vol_mm3 / 1000.0
 
     if n_vox == 0:
         return {"shape_volume_cc": 0.0}
 
-    coords  = np.argwhere(mask_bool)
-    x, y, z = coords[:,0], coords[:,1], coords[:,2]
+    coords = np.argwhere(mask_bool)
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
 
     # Bounding box dimensions in mm
     bb_x = (x.max() - x.min()) * float(vox_sizes[0])
@@ -371,31 +378,31 @@ def extract_shape_features(mask_bool: np.ndarray,
     bb_vol = bb_x * bb_y * bb_z
 
     # Equivalent sphere diameter
-    eq_diam = 2 * (3 * vol_mm3 / (4 * np.pi)) ** (1/3)
+    eq_diam = 2 * (3 * vol_mm3 / (4 * np.pi)) ** (1 / 3)
 
     # Sphericity = how close to a perfect sphere
     # Surface area approximation via marching-cube-like erosion
-    eroded   = ndimage.binary_erosion(mask_bool)
-    surface  = mask_bool & ~eroded
-    n_surf   = int(surface.sum())
-    surf_mm2 = n_surf * (vox_mm3 ** (2/3))
+    eroded = ndimage.binary_erosion(mask_bool)
+    surface = mask_bool & ~eroded
+    n_surf = int(surface.sum())
+    surf_mm2 = n_surf * (vox_mm3 ** (2 / 3))
 
-    sphericity = (np.pi ** (1/3) * (6 * vol_mm3) ** (2/3)) / (surf_mm2 + 1e-8)
+    sphericity = (np.pi ** (1 / 3) * (6 * vol_mm3) ** (2 / 3)) / (surf_mm2 + 1e-8)
     sphericity = min(float(sphericity), 1.0)
 
     # Compactness
-    compactness = vol_mm3 / (surf_mm2 ** 1.5 + 1e-8)
+    compactness = vol_mm3 / (surf_mm2**1.5 + 1e-8)
 
     # Elongation (ratio of smallest to largest bbox dimension)
     dims = sorted([bb_x, bb_y, bb_z])
-    elongation  = float(dims[0] / (dims[2] + 1e-8))
-    flatness    = float(dims[0] / (dims[1] + 1e-8))
+    elongation = float(dims[0] / (dims[2] + 1e-8))
+    flatness = float(dims[0] / (dims[1] + 1e-8))
 
     # Extent = volume / bounding box volume
     extent = float(vol_mm3 / (bb_vol + 1e-8))
 
     # Convexity (filled volume / actual volume)
-    filled   = ndimage.binary_fill_holes(mask_bool)
+    filled = ndimage.binary_fill_holes(mask_bool)
     n_filled = int(filled.sum())
     convexity = float(n_vox / (n_filled + 1e-8))
 
@@ -403,54 +410,50 @@ def extract_shape_features(mask_bool: np.ndarray,
     max_diam = float(max(bb_x, bb_y, bb_z))  # type: ignore
 
     return {
-        "shape_volume_cc":      round(vol_cc, 3),  # type: ignore
-        "shape_volume_mm3":     round(vol_mm3, 1),  # type: ignore
-        "shape_surface_mm2":    round(surf_mm2, 1),  # type: ignore
-        "shape_sphericity":     round(sphericity, 4),  # type: ignore
-        "shape_compactness":    round(compactness, 6),  # type: ignore
-        "shape_elongation":     round(elongation, 4),  # type: ignore
-        "shape_flatness":       round(flatness, 4),  # type: ignore
-        "shape_extent":         round(extent, 4),  # type: ignore
-        "shape_convexity":      round(convexity, 4),  # type: ignore
-        "shape_max_diameter_mm":round(max_diam, 1),  # type: ignore
+        "shape_volume_cc": round(vol_cc, 3),  # type: ignore
+        "shape_volume_mm3": round(vol_mm3, 1),  # type: ignore
+        "shape_surface_mm2": round(surf_mm2, 1),  # type: ignore
+        "shape_sphericity": round(sphericity, 4),  # type: ignore
+        "shape_compactness": round(compactness, 6),  # type: ignore
+        "shape_elongation": round(elongation, 4),  # type: ignore
+        "shape_flatness": round(flatness, 4),  # type: ignore
+        "shape_extent": round(extent, 4),  # type: ignore
+        "shape_convexity": round(convexity, 4),  # type: ignore
+        "shape_max_diameter_mm": round(max_diam, 1),  # type: ignore
         "shape_eq_diameter_mm": round(eq_diam, 1),  # type: ignore
-        "shape_bbox_x_mm":      round(bb_x, 1),  # type: ignore
-        "shape_bbox_y_mm":      round(bb_y, 1),  # type: ignore
-        "shape_bbox_z_mm":      round(bb_z, 1),  # type: ignore
+        "shape_bbox_x_mm": round(bb_x, 1),  # type: ignore
+        "shape_bbox_y_mm": round(bb_y, 1),  # type: ignore
+        "shape_bbox_z_mm": round(bb_z, 1),  # type: ignore
         "shape_surface_to_vol": round(surf_mm2 / (vol_mm3 + 1e-8), 4),  # type: ignore
     }
 
 
-def extract_subregion_ratios(seg_arr: np.ndarray,
-                              whole_mask: np.ndarray,
-                              vox_mm3: float) -> dict:
+def extract_subregion_ratios(seg_arr: np.ndarray, whole_mask: np.ndarray, vox_mm3: float) -> dict:
     """Clinically meaningful sub-region ratios."""
     n_whole = float(whole_mask.sum())
     if n_whole == 0:
         return {}
 
     n_ncr = float((seg_arr == 1).sum())  # type: ignore
-    n_ed  = float((seg_arr == 2).sum())  # type: ignore
-    n_et  = float((seg_arr == 3).sum())  # type: ignore
-    n_tc  = n_ncr + n_et   # tumour core = NCR + ET
+    n_ed = float((seg_arr == 2).sum())  # type: ignore
+    n_et = float((seg_arr == 4).sum())  # type: ignore  # BraTS 2021: ET = label 4
+    n_tc = n_ncr + n_et  # tumour core = NCR + ET
 
     return {
-        "ratio_necrosis_to_whole":    round(n_ncr / n_whole, 4),  # type: ignore
-        "ratio_edema_to_whole":       round(n_ed  / n_whole, 4),  # type: ignore
-        "ratio_enhancing_to_whole":   round(n_et  / n_whole, 4),  # type: ignore
-        "ratio_core_to_whole":        round(n_tc  / n_whole, 4),  # type: ignore
-        "ratio_edema_to_core":        round(n_ed  / (n_tc + 1), 4),  # type: ignore
-        "ratio_necrosis_to_core":     round(n_ncr / (n_tc + 1), 4),  # type: ignore
-        "volume_tumour_core_cc":      round(n_tc  * vox_mm3 / 1000, 2),  # type: ignore
-        "volume_necrosis_cc":         round(n_ncr * vox_mm3 / 1000, 2),  # type: ignore
-        "volume_edema_cc":            round(n_ed  * vox_mm3 / 1000, 2),  # type: ignore
-        "volume_enhancing_cc":        round(n_et  * vox_mm3 / 1000, 2),  # type: ignore
+        "ratio_necrosis_to_whole": round(n_ncr / n_whole, 4),  # type: ignore
+        "ratio_edema_to_whole": round(n_ed / n_whole, 4),  # type: ignore
+        "ratio_enhancing_to_whole": round(n_et / n_whole, 4),  # type: ignore
+        "ratio_core_to_whole": round(n_tc / n_whole, 4),  # type: ignore
+        "ratio_edema_to_core": round(n_ed / (n_tc + 1), 4),  # type: ignore
+        "ratio_necrosis_to_core": round(n_ncr / (n_tc + 1), 4),  # type: ignore
+        "volume_tumour_core_cc": round(n_tc * vox_mm3 / 1000, 2),  # type: ignore
+        "volume_necrosis_cc": round(n_ncr * vox_mm3 / 1000, 2),  # type: ignore
+        "volume_edema_cc": round(n_ed * vox_mm3 / 1000, 2),  # type: ignore
+        "volume_enhancing_cc": round(n_et * vox_mm3 / 1000, 2),  # type: ignore
     }
 
 
-def compute_glcm_features(vol_arr: np.ndarray,
-                          mask_bool: np.ndarray,
-                          n_slices: int = 5) -> dict:
+def compute_glcm_features(vol_arr: np.ndarray, mask_bool: np.ndarray, n_slices: int = 5) -> dict:
     """
     Extract GLCM (Grey-Level Co-occurrence Matrix) texture features
     from the best tumour slices.
@@ -459,70 +462,81 @@ def compute_glcm_features(vol_arr: np.ndarray,
         return {}
 
     all_contrast, all_dissim, all_homog = [], [], []
-    all_energy, all_corr, all_asm      = [], [], []
+    all_energy, all_corr, all_asm = [], [], []
 
-    slice_sums = mask_bool.sum(axis=(0,1))
+    slice_sums = mask_bool.sum(axis=(0, 1))
     best_slices = np.argsort(slice_sums)[-n_slices:]
 
     for sl in best_slices:
-        sl_img  = vol_arr[:,:,sl]
-        sl_mask = mask_bool[:,:,sl]
-        if sl_mask.sum() < 10: continue
+        sl_img = vol_arr[:, :, sl]
+        sl_mask = mask_bool[:, :, sl]
+        if sl_mask.sum() < 10:
+            continue
 
         rows, cols = np.where(sl_mask)
-        r0, r1 = max(rows.min()-5, 0), min(rows.max()+5, sl_img.shape[0])
-        c0, c1 = max(cols.min()-5, 0), min(cols.max()+5, sl_img.shape[1])
+        r0, r1 = max(rows.min() - 5, 0), min(rows.max() + 5, sl_img.shape[0])
+        c0, c1 = max(cols.min() - 5, 0), min(cols.max() + 5, sl_img.shape[1])
 
         patch = sl_img[r0:r1, c0:c1]
-        if patch.size < 25: continue
+        if patch.size < 25:
+            continue
 
-        patch_u8 = rescale_intensity(patch, in_range='image', out_range=(0, 63)).astype(np.uint8)
-        glcm = graycomatrix(patch_u8, distances=[1], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4], 
-                            levels=64, symmetric=True, normed=True)
+        patch_u8 = rescale_intensity(patch, in_range="image", out_range=(0, 63)).astype(np.uint8)
+        glcm = graycomatrix(
+            patch_u8,
+            distances=[1],
+            angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4],
+            levels=64,
+            symmetric=True,
+            normed=True,
+        )
 
-        all_contrast.append(np.mean(graycoprops(glcm, 'contrast')))
-        all_dissim.append(np.mean(graycoprops(glcm, 'dissimilarity')))
-        all_homog.append(np.mean(graycoprops(glcm, 'homogeneity')))
-        all_energy.append(np.mean(graycoprops(glcm, 'energy')))
-        all_corr.append(np.mean(graycoprops(glcm, 'correlation')))
-        all_asm.append(np.mean(graycoprops(glcm, 'ASM')))
+        all_contrast.append(np.mean(graycoprops(glcm, "contrast")))
+        all_dissim.append(np.mean(graycoprops(glcm, "dissimilarity")))
+        all_homog.append(np.mean(graycoprops(glcm, "homogeneity")))
+        all_energy.append(np.mean(graycoprops(glcm, "energy")))
+        all_corr.append(np.mean(graycoprops(glcm, "correlation")))
+        all_asm.append(np.mean(graycoprops(glcm, "ASM")))
 
-    if not all_contrast: return {}
+    if not all_contrast:
+        return {}
 
     return {
-        "contrast":      float(np.mean(all_contrast)),
+        "contrast": float(np.mean(all_contrast)),
         "dissimilarity": float(np.mean(all_dissim)),
-        "homogeneity":   float(np.mean(all_homog)),
-        "energy":        float(np.mean(all_energy)),
-        "correlation":   float(np.mean(all_corr)),
-        "asm":           float(np.mean(all_asm)),
+        "homogeneity": float(np.mean(all_homog)),
+        "energy": float(np.mean(all_energy)),
+        "correlation": float(np.mean(all_corr)),
+        "asm": float(np.mean(all_asm)),
     }
 
+
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def evaluate_who_rules(metrics: dict) -> list:
     """Consensus rule engine based on WHO 2021 Guidelines for CNS Tumours."""
     who_patterns = []
-    
+
     vol_ncr = float(metrics.get("volume_necrosis_cc") or 0.0)
     vol_et = float(metrics.get("volume_enhancing_cc") or 0.0)
     vol_ed = float(metrics.get("volume_edema_cc") or 0.0)
     vol_core = float(metrics.get("volume_tumour_core_cc") or (vol_ncr + vol_et))
     is_mismatch = metrics.get("t2_flair_mismatch", False)
-    ct_calc_vol_cc = float(metrics.get("ct_calcification_cc", 0.0))
-    is_frontal = metrics.get("is_frontal", False)
+    float(metrics.get("ct_calcification_cc", 0.0))
+    metrics.get("is_frontal", False)
     sphericity = float(metrics.get("sphericity", 1.0))
-    
+
     if vol_core == 0:
         return ["Características insuficientes para dedução clínica."]
 
     # Derived: necrosis fraction of core
     ncr_frac = vol_ncr / (vol_core + 1e-6)
-    
+
     # Grade 4 indicator: large necrotic core (GBM hallmark)
     # When necrosis fraction > 20% AND core > 5cc this is almost certainly
     # GBM (IDH-wildtype), not a lower-grade IDH-mutant tumour.
-    is_gbm_morphology = (ncr_frac > 0.20 and vol_core > 5.0)
+    is_gbm_morphology = ncr_frac > 0.20 and vol_core > 5.0
 
     # Rule 1 — T2-FLAIR mismatch
     # CRITICAL: This rule applies to LOWER-GRADE IDH-mutant gliomas (Grade 2-3).
@@ -560,13 +574,13 @@ def evaluate_who_rules(metrics: dict) -> list:
             "pathognomonic of GBM (WHO Grade IV, IDH-wildtype). "
             "Enhancement may be underestimated by BraTS segmentation.".format(ncr_frac * 100, vol_ncr)
         )
-        
+
     # Rule 4 (Metástase)
     if vol_ed > 3.0 * vol_core and sphericity > 0.8:
         who_patterns.append(
             "Rule 4: Very high oedema-to-core ratio with spherical lesion — consider brain metastasis from extracranial primary."
         )
-        
+
     return who_patterns
 
 
@@ -597,11 +611,33 @@ else:
     _seg_p: Any = cast(Any, seg_path)
     print(f"  Segmentation   : {getattr(_seg_p, 'name')}")
 
+# ── Guard: non-GBM / zero-tumour ─────────────────────────────────────
+qual_path = latest_dir / "segmentation_quality.json"
+if qual_path.exists():
+    with open(qual_path) as f:
+        q_data = json.load(f)
+        qual = q_data.get("quality", q_data)
+        vol = qual.get("v_wt_cc", qual.get("tumour_volume_cc", 0))
+        non_gbm = qual.get("non_glioblastoma_suspected", False)
+        zero_tumor = qual.get("zero_tumor_volume", vol < 0.01)
+        if non_gbm:
+            print("ℹ️  SKIPPED: Non-glioblastoma suspected (model did not activate).")
+            with open(latest_dir / "radiomics_results.json", "w") as f:
+                json.dump(
+                    {"status": "skipped", "reason": "non_glioblastoma_suspected", "volume_cc": float(vol)}, f, indent=2
+                )
+            sys.exit(0)
+        if zero_tumor:
+            print("ℹ️  SKIPPED: Zero-tumour volume detected.")
+            with open(latest_dir / "radiomics_results.json", "w") as f:
+                json.dump({"status": "skipped", "reason": "zero_tumor_volume", "volume_cc": float(vol)}, f, indent=2)
+            sys.exit(0)
+
 # Load segmentation
-seg_nib   = nib.load(str(seg_path))
-seg_arr   = seg_nib.get_fdata().astype(np.uint8)
+seg_nib = nib.load(str(seg_path))
+seg_arr = seg_nib.get_fdata().astype(np.uint8)
 vox_sizes = seg_nib.header.get_zooms()[:3]
-vox_mm3   = float(vox_sizes[0] * vox_sizes[1] * vox_sizes[2])
+vox_mm3 = float(vox_sizes[0] * vox_sizes[1] * vox_sizes[2])
 whole_mask = seg_arr > 0
 
 if not whole_mask.any():
@@ -609,27 +645,27 @@ if not whole_mask.any():
     sys.exit(1)
 
 print(f"  Tumour voxels  : {whole_mask.sum():,}")
-print(f"  Voxel size     : {tuple(round(v,2) for v in vox_sizes)} mm")  # type: ignore
+print(f"  Voxel size     : {tuple(round(v, 2) for v in vox_sizes)} mm")  # type: ignore
 
 # ── Load all available volumes ────────────────────────────────────────
 banner("LOADING VOLUMES")
 
 volumes = {}
 ct_files = {
-    "CT":       "ct_brain_registered.nii.gz",
-    "CT_Calc":  "ct_calcification.nii.gz",
-    "CT_Haem":  "ct_haemorrhage.nii.gz"
+    "CT": "ct_brain_registered.nii.gz",
+    "CT_Calc": "ct_calcification.nii.gz",
+    "CT_Haem": "ct_haemorrhage.nii.gz",
 }
 vol_paths = {
-    "T1":    MRI_DIR  / "t1_resampled.nii.gz",
-    "T1c":   MRI_DIR  / "t1c_resampled.nii.gz",
-    "T2":    MRI_DIR  / "t2_resampled.nii.gz",
-    "FLAIR": MRI_DIR  / "flair_resampled.nii.gz",
-    "T2star":EXTRA_DIR / "t2star_resampled.nii.gz",
-    "DWI":   EXTRA_DIR / "dwi_resampled.nii.gz",
-    "ADC":   EXTRA_DIR / "adc_resampled.nii.gz",
+    "T1": MRI_DIR / "t1_resampled.nii.gz",
+    "T1c": MRI_DIR / "t1c_resampled.nii.gz",
+    "T2": MRI_DIR / "t2_resampled.nii.gz",
+    "FLAIR": MRI_DIR / "flair_resampled.nii.gz",
+    "T2star": EXTRA_DIR / "t2star_resampled.nii.gz",
+    "DWI": EXTRA_DIR / "dwi_resampled.nii.gz",
+    "ADC": EXTRA_DIR / "adc_resampled.nii.gz",
     "CT_density": EXTRA_DIR / "ct_tumour_density.nii.gz",
-    **({k: latest_dir / v for k, v in ct_files.items()} if latest_dir.exists() else {})  # type: ignore
+    **({k: latest_dir / v for k, v in ct_files.items()} if latest_dir.exists() else {}),  # type: ignore
 }
 
 # Fallback to raw t1 if resampled doesn't exist
@@ -641,8 +677,8 @@ for name, path in vol_paths.items():
         arr = nib.load(str(path)).get_fdata().astype(np.float32)
         # Match shape to segmentation
         if arr.shape != seg_arr.shape:
-            ms  = tuple(min(a,b) for a,b in zip(arr.shape, seg_arr.shape))
-            arr = arr[:ms[0], :ms[1], :ms[2]]
+            ms = tuple(min(a, b) for a, b in zip(arr.shape, seg_arr.shape))
+            arr = arr[: ms[0], : ms[1], : ms[2]]
         volumes[name] = arr
         print(f"  Loaded {name:7s}: shape={arr.shape}")
     else:
@@ -657,18 +693,18 @@ all_features = {}
 print("  Computing shape features…")
 shape_feats = extract_shape_features(whole_mask, vox_sizes)
 all_features.update(shape_feats)
-print(f"  Sphericity : {shape_feats.get('shape_sphericity',0):.4f}")
-print(f"  Convexity  : {shape_feats.get('shape_convexity',0):.4f}")
-print(f"  Max diameter: {shape_feats.get('shape_max_diameter_mm',0):.1f} mm")
+print(f"  Sphericity : {shape_feats.get('shape_sphericity', 0):.4f}")
+print(f"  Convexity  : {shape_feats.get('shape_convexity', 0):.4f}")
+print(f"  Max diameter: {shape_feats.get('shape_max_diameter_mm', 0):.1f} mm")
 
 # Sub-region ratios
 print("\n  Computing sub-region ratios…")
 ratio_feats = extract_subregion_ratios(seg_arr, whole_mask, vox_mm3)
 all_features.update(ratio_feats)
-print(f"  Necrosis/whole : {ratio_feats.get('ratio_necrosis_to_whole',0):.4f}")
-print(f"  Edema/whole    : {ratio_feats.get('ratio_edema_to_whole',0):.4f}")
-print(f"  Enhancing/whole: {ratio_feats.get('ratio_enhancing_to_whole',0):.4f}")
-print(f"  Edema/core     : {ratio_feats.get('ratio_edema_to_core',0):.4f}")
+print(f"  Necrosis/whole : {ratio_feats.get('ratio_necrosis_to_whole', 0):.4f}")
+print(f"  Edema/whole    : {ratio_feats.get('ratio_edema_to_whole', 0):.4f}")
+print(f"  Enhancing/whole: {ratio_feats.get('ratio_enhancing_to_whole', 0):.4f}")
+print(f"  Edema/core     : {ratio_feats.get('ratio_edema_to_core', 0):.4f}")
 
 # Intensity features for each modality
 print("\n  Computing intensity features…")
@@ -677,22 +713,24 @@ for name, arr in volumes.items():
     if whole_mask.shape == arr.shape:
         mask_b = whole_mask.astype(bool)
     else:
-        ms     = tuple(min(a,b) for a,b in zip(arr.shape, whole_mask.shape))
-        mask_b = whole_mask[:ms[0],:ms[1],:ms[2]].astype(bool)
-        arr    = arr[:ms[0],:ms[1],:ms[2]]
+        ms = tuple(min(a, b) for a, b in zip(arr.shape, whole_mask.shape))
+        mask_b = whole_mask[: ms[0], : ms[1], : ms[2]].astype(bool)
+        arr = arr[: ms[0], : ms[1], : ms[2]]
 
     feats = extract_intensity_features(arr, mask_b, name)
     all_features.update(feats)
     intensity_summary[name] = {
-        "mean": round(float(feats.get(f"{name}_mean",0)), 1),  # type: ignore
-        "std":  round(float(feats.get(f"{name}_std", 0)), 1),  # type: ignore
-        "skew": round(float(feats.get(f"{name}_skewness",0)), 3),  # type: ignore
-        "ent":  round(float(feats.get(f"{name}_entropy",0)), 3),  # type: ignore
+        "mean": round(float(feats.get(f"{name}_mean", 0)), 1),  # type: ignore
+        "std": round(float(feats.get(f"{name}_std", 0)), 1),  # type: ignore
+        "skew": round(float(feats.get(f"{name}_skewness", 0)), 3),  # type: ignore
+        "ent": round(float(feats.get(f"{name}_entropy", 0)), 3),  # type: ignore
     }
-    print(f"  {name:7s}: mean={intensity_summary[name]['mean']:8.1f}  "
-          f"std={intensity_summary[name]['std']:7.1f}  "
-          f"skew={intensity_summary[name]['skew']:6.3f}  "
-          f"entropy={intensity_summary[name]['ent']:.3f}")
+    print(
+        f"  {name:7s}: mean={intensity_summary[name]['mean']:8.1f}  "
+        f"std={intensity_summary[name]['std']:7.1f}  "
+        f"skew={intensity_summary[name]['skew']:6.3f}  "
+        f"entropy={intensity_summary[name]['ent']:.3f}"
+    )
 
 # ── CT-specific radiomics features (Hounsfield-based) ────────────────
 if "CT" in volumes:
@@ -702,32 +740,32 @@ if "CT" in volumes:
         ct_mask = whole_mask.astype(bool)
     else:
         _ms = tuple(min(a, b) for a, b in zip(ct_vol.shape, whole_mask.shape))
-        ct_mask = whole_mask[:_ms[0], :_ms[1], :_ms[2]].astype(bool)
-        ct_vol = ct_vol[:_ms[0], :_ms[1], :_ms[2]]
+        ct_mask = whole_mask[: _ms[0], : _ms[1], : _ms[2]].astype(bool)
+        ct_vol = ct_vol[: _ms[0], : _ms[1], : _ms[2]]
 
     ct_tumor = ct_vol[ct_mask]
     if len(ct_tumor) > 0:
         n_ct = len(ct_tumor)
         ct_features = {
-            "ct_mean_hu":           float(np.mean(ct_tumor)),
-            "ct_std_hu":            float(np.std(ct_tumor)),
-            "ct_median_hu":         float(np.median(ct_tumor)),
-            "ct_min_hu":            float(np.min(ct_tumor)),
-            "ct_max_hu":            float(np.max(ct_tumor)),
-            "ct_skewness":          float(skew(ct_tumor)),
-            "ct_kurtosis":          float(kurtosis(ct_tumor)),
+            "ct_mean_hu": float(np.mean(ct_tumor)),
+            "ct_std_hu": float(np.std(ct_tumor)),
+            "ct_median_hu": float(np.median(ct_tumor)),
+            "ct_min_hu": float(np.min(ct_tumor)),
+            "ct_max_hu": float(np.max(ct_tumor)),
+            "ct_skewness": float(skew(ct_tumor)),
+            "ct_kurtosis": float(kurtosis(ct_tumor)),
             # Clinically meaningful HU-based percentages
             "ct_calcification_pct": float((ct_tumor > 130).sum() / n_ct),
-            "ct_haemorrhage_pct":   float(((ct_tumor >= 50) & (ct_tumor <= 90)).sum() / n_ct),
+            "ct_haemorrhage_pct": float(((ct_tumor >= 50) & (ct_tumor <= 90)).sum() / n_ct),
             "ct_tumour_density_pct": float(((ct_tumor >= 25) & (ct_tumor <= 60)).sum() / n_ct),
-            "ct_hypodense_pct":     float((ct_tumor < 25).sum() / n_ct),
-            "ct_hyperdense_pct":    float((ct_tumor > 60).sum() / n_ct),
+            "ct_hypodense_pct": float((ct_tumor < 25).sum() / n_ct),
+            "ct_hyperdense_pct": float((ct_tumor > 60).sum() / n_ct),
         }
         all_features.update(ct_features)
         print(f"  CT mean HU           : {ct_features['ct_mean_hu']:.1f}")
-        print(f"  CT calcification     : {ct_features['ct_calcification_pct']*100:.1f}%")
-        print(f"  CT haemorrhage       : {ct_features['ct_haemorrhage_pct']*100:.1f}%")
-        print(f"  CT tumour density    : {ct_features['ct_tumour_density_pct']*100:.1f}%")
+        print(f"  CT calcification     : {ct_features['ct_calcification_pct'] * 100:.1f}%")
+        print(f"  CT haemorrhage       : {ct_features['ct_haemorrhage_pct'] * 100:.1f}%")
+        print(f"  CT tumour density    : {ct_features['ct_tumour_density_pct'] * 100:.1f}%")
     else:
         print("  ⚠️  No CT voxels inside tumour mask")
 else:
@@ -735,47 +773,48 @@ else:
 
 # PyRadiomics (preferred) or scikit-image (fallback)
 if HAS_PYRADIOMICS:
-    import SimpleITK as sitk # type: ignore
-    from radiomics import featureextractor # type: ignore
+    import SimpleITK as sitk  # type: ignore
+    from radiomics import featureextractor  # type: ignore
+
     print("\n  Computing features with PyRadiomics…")
-    
+
     # Configure extractor
     extractor = featureextractor.RadiomicsFeatureExtractor()
     extractor.disableAllFeatures()
-    extractor.enableFeatureClassByName('shape')
-    extractor.enableFeatureClassByName('firstorder')
-    extractor.enableFeatureClassByName('glcm')
-    extractor.enableFeatureClassByName('glrlm')
-    extractor.enableFeatureClassByName('glszm')
-    extractor.enableFeatureClassByName('gldm')
-    extractor.enableFeatureClassByName('ngtdm')
-    
+    extractor.enableFeatureClassByName("shape")
+    extractor.enableFeatureClassByName("firstorder")
+    extractor.enableFeatureClassByName("glcm")
+    extractor.enableFeatureClassByName("glrlm")
+    extractor.enableFeatureClassByName("glszm")
+    extractor.enableFeatureClassByName("gldm")
+    extractor.enableFeatureClassByName("ngtdm")
+
     # We extract features for each modality
     pyrad_count = 0
     for vol_name, arr in volumes.items():
-        if vol_name not in ("T1c","T2","FLAIR","ADC"):
+        if vol_name not in ("T1c", "T2", "FLAIR", "ADC"):
             continue
-            
+
         # PyRadiomics expects SimpleITK images with physical spacing
         image_itk = sitk.GetImageFromArray(np.transpose(arr, (2, 1, 0)))
-        mask_itk  = sitk.GetImageFromArray(np.transpose(whole_mask.astype(np.uint8), (2, 1, 0)))
-        
+        mask_itk = sitk.GetImageFromArray(np.transpose(whole_mask.astype(np.uint8), (2, 1, 0)))
+
         # Voxel spacing is CRITICAL for accurate radiomics
         image_itk.SetSpacing([float(x) for x in vox_sizes])
         mask_itk.SetSpacing([float(x) for x in vox_sizes])
         mask_itk.CopyInformation(image_itk)
-        
+
         try:
             result = extractor.execute(image_itk, mask_itk)
             for key, value in result.items():
                 if key.startswith("original_"):
                     # Use a clean name: T1c_original_firstorder_Mean -> T1c_mean_pyrad
-                    clean_key = f"{vol_name}_{key.replace('original_','')}"
-                    all_features[clean_key] = float(value) # type: ignore
+                    clean_key = f"{vol_name}_{key.replace('original_', '')}"
+                    all_features[clean_key] = float(value)  # type: ignore
                     pyrad_count += 1
         except Exception as e:
             print(f"    ⚠️  PyRadiomics failed for {vol_name}: {e}")
-            
+
     # No texture reporting inside loop to avoid clutter
     pass
 elif HAS_SKIMAGE:
@@ -807,14 +846,22 @@ if HAS_MONAI:
     if cnn_results:
         n_deep = cnn_results.get("cnn_deep_feature_size", 0)
         method = cnn_results.get("cnn_method", "unknown")
-        _cgp = cnn_results.get('cnn_grade_high_prob')
-        print(f"  CNN Grade High Prob  : {_cgp*100:.1f}%" if _cgp is not None else "  CNN Grade High Prob  : N/A (cached features)")
-        
-        _gbm = cnn_results.get('cnn_gbm_prob')
-        print(f"  CNN GBM Probability  : {_gbm*100:.1f}%" if _gbm is not None else "  CNN GBM Probability  : N/A (cached features)")
+        _cgp = cnn_results.get("cnn_grade_high_prob")
+        print(
+            f"  CNN Grade High Prob  : {_cgp * 100:.1f}%"
+            if _cgp is not None
+            else "  CNN Grade High Prob  : N/A (cached features)"
+        )
+
+        _gbm = cnn_results.get("cnn_gbm_prob")
+        print(
+            f"  CNN GBM Probability  : {_gbm * 100:.1f}%"
+            if _gbm is not None
+            else "  CNN GBM Probability  : N/A (cached features)"
+        )
         print(f"  Deep feature vector  : {n_deep} dimensions")
         print(f"  Method               : {method}")
-        print(f"  ✅ 2.5D Deep Learning features integrated")
+        print("  ✅ 2.5D Deep Learning features integrated")
 
         # Save CNN deep features for future XGBoost training
         if _cnn_deep_vec is not None:
@@ -862,8 +909,8 @@ if ct_calc_path.exists():
         ct_calc_arr = ct_calc_nib.get_fdata()
         if ct_calc_arr.shape != whole_mask.shape:
             _ms = tuple(min(a, b) for a, b in zip(ct_calc_arr.shape, whole_mask.shape))
-            ct_calc_arr = ct_calc_arr[:_ms[0], :_ms[1], :_ms[2]]
-            whole_mask = whole_mask[:_ms[0], :_ms[1], :_ms[2]]
+            ct_calc_arr = ct_calc_arr[: _ms[0], : _ms[1], : _ms[2]]
+            whole_mask = whole_mask[: _ms[0], : _ms[1], : _ms[2]]
 
         calc_in_tumor = (ct_calc_arr > 0) & whole_mask
         voxels = calc_in_tumor.sum()
@@ -879,7 +926,7 @@ who_metrics = {
     "t2_flair_mismatch": is_mismatch,
     "is_frontal": is_frontal,
     "sphericity": sphericity,
-    **ratio_feats
+    **ratio_feats,
 }
 
 who_patterns = evaluate_who_rules(who_metrics)
@@ -891,7 +938,8 @@ try:
         patient_age = int(patient_age_str.replace("Y", ""))
     else:
         import re
-        nums = re.findall(r'\d+', patient_age_str)
+
+        nums = re.findall(r"\d+", patient_age_str)
         patient_age = int(nums[0]) if nums else 0
 except ValueError:
     patient_age = 0
@@ -902,16 +950,20 @@ except ValueError:
 #   - BUT: necrosis fraction >20% + large core is pathognomonic of GBM (IDH-wildtype)
 #     and OVERRIDES the mismatch signal (known false positive in GBM)
 _ncr_frac = float(ratio_feats.get("ratio_necrosis_to_whole", 0.0))
-_vol_core  = float(ratio_feats.get("volume_tumour_core_cc", 0.0) or
-                   (ratio_feats.get("volume_necrosis_cc", 0.0) + ratio_feats.get("volume_enhancing_cc", 0.0)))
-_is_gbm_morphology = (_ncr_frac > 0.20 and _vol_core > 5.0)
+_vol_core = float(
+    ratio_feats.get("volume_tumour_core_cc", 0.0)
+    or (ratio_feats.get("volume_necrosis_cc", 0.0) + ratio_feats.get("volume_enhancing_cc", 0.0))
+)
+_is_gbm_morphology = _ncr_frac > 0.20 and _vol_core > 5.0
 
 if _is_gbm_morphology:
     # GBM morphology: necrosis dominates — IDH-wildtype is highly likely
     # Mismatch sign is unreliable in Grade IV (T2 heterogeneity from necrosis ≠ IDH-mutant signal)
     idh_prob = 0.08
-    print(f"    ℹ️ GBM morphology detected (necrosis {_ncr_frac*100:.0f}%, core {_vol_core:.1f}cc) "
-          f"— mismatch rule suppressed, IDH-wildtype prior applied.")
+    print(
+        f"    ℹ️ GBM morphology detected (necrosis {_ncr_frac * 100:.0f}%, core {_vol_core:.1f}cc) "
+        f"— mismatch rule suppressed, IDH-wildtype prior applied."
+    )
 else:
     # Weighted additive evidence system — no single signal is sufficient alone.
     # Evidence strengths reflect WHO 2021 and neuroradiology literature:
@@ -927,9 +979,11 @@ else:
     if is_frontal:
         idh_score += 0.15
     idh_prob = min(idh_score, 0.88)
-    print(f"    ℹ️ IDH score: base 0.12 + mismatch:{int(is_mismatch)*0.35} "
-          f"+ calc:{int(ct_calc_vol_cc>=1)*0.25} + frontal:{int(is_frontal)*0.15} "
-          f"= {idh_prob:.2f}")
+    print(
+        f"    ℹ️ IDH score: base 0.12 + mismatch:{int(is_mismatch) * 0.35} "
+        f"+ calc:{int(ct_calc_vol_cc >= 1) * 0.25} + frontal:{int(is_frontal) * 0.15} "
+        f"= {idh_prob:.2f}"
+    )
 
 # Age-corrected Bayesian prior for IDH mutation
 # Evidence: Yan et al. NEJM 2009. IDH prevalence decreases significantly with age.
@@ -946,12 +1000,13 @@ _idh_confidence = max(0.40, age_prior)  # confidence tracks the prior strength
 
 if idh_prob > 0.50:
     idh_status = "IDH-mutant"
-    idh_interp = ("Genótipo indicativo de astrocitoma IDH-mutant ou oligodendroglioma "
-                  "(WHO 2021). Prognóstico tipicamente mais favorável que GBM.")
+    idh_interp = (
+        "Genótipo indicativo de astrocitoma IDH-mutant ou oligodendroglioma "
+        "(WHO 2021). Prognóstico tipicamente mais favorável que GBM."
+    )
 else:
     idh_status = "IDH-wildtype"
-    idh_interp = ("Típico de glioblastoma IDH-wildtype primário (WHO 2021). "
-                  "A mutação IDH é rara nesta faixa etária.")
+    idh_interp = "Típico de glioblastoma IDH-wildtype primário (WHO 2021). A mutação IDH é rara nesta faixa etária."
 
 # Se existe edema enorme e a esfericidade for muito elevada, pode ser metástase.
 prob_prim = 0.95
@@ -969,24 +1024,21 @@ classification = {
     "idh_mutation": {
         "most_likely": idh_status,
         "probability": idh_prob,
-        "confidence": f"{_idh_confidence*100:.0%}",  # age-adjusted, not a probability multiplier
-        "interpretation": idh_interp
+        "confidence": f"{_idh_confidence * 100:.0%}",  # age-adjusted, not a probability multiplier
+        "interpretation": idh_interp,
     },
     "mgmt_methylation": {
-        "probability": 0.45, 
-        "confidence": "Medium / Borderline (45%)", 
-        "interpretation": "Estatuto MGMT indeterminado pelas features extraídas; sugere tipagem genómica direta."
+        "probability": 0.45,
+        "confidence": "Medium / Borderline (45%)",
+        "interpretation": "Estatuto MGMT indeterminado pelas features extraídas; sugere tipagem genómica direta.",
     },
     "primary_vs_metastasis": {
-        "probability_primary_gbm": prob_prim, 
-        "probability_metastasis": 1.0 - prob_prim, 
+        "probability_primary_gbm": prob_prim,
+        "probability_metastasis": 1.0 - prob_prim,
         "most_likely": prim_most_likely,
-        "interpretation": prim_interp
+        "interpretation": prim_interp,
     },
-    "aggressiveness": {
-        "score_0_to_10": 8.7,
-        "category": "High Aggressiveness"
-    }
+    "aggressiveness": {"score_0_to_10": 8.7, "category": "High Aggressiveness"},
 }
 
 print("\n  AVALIAÇÃO CLÍNICA BASEADA EM REGRAS (Diretrizes OMS 2021):")
@@ -1002,35 +1054,44 @@ banner("SAVING RESULTS")
 # Save all features
 feat_path = OUTPUT_DIR / "radiomics_features.json"  # type: ignore
 with open(feat_path, "w") as f:
+
     class _NumpyEncoder(json.JSONEncoder):
         def default(self, obj):  # type: ignore
             import numpy as _np  # type: ignore
-            if isinstance(obj, (_np.bool_,)): return bool(obj)
-            if isinstance(obj, (_np.integer,)): return int(obj)
-            if isinstance(obj, (_np.floating,)): return float(obj)
-            if isinstance(obj, _np.ndarray): return obj.tolist()
+
+            if isinstance(obj, (_np.bool_,)):
+                return bool(obj)
+            if isinstance(obj, (_np.integer,)):
+                return int(obj)
+            if isinstance(obj, (_np.floating,)):
+                return float(obj)
+            if isinstance(obj, _np.ndarray):
+                return obj.tolist()
             return super().default(obj)
+
     assert seg_path is not None  # narrowed: sys.exit() fired above if None
-    json.dump({
-        "timestamp":      datetime.now().isoformat(),
-        "seg_source":     seg_path.name,
-        "n_features":     len(all_features),
-        "shape":          shape_feats,
-        "subregion_ratios": ratio_feats,
-        "intensity":      intensity_summary,
-        "classification": classification,
-        "who_metrics":    who_metrics,
-        "all_features":   {k: v for k, v in all_features.items()
-                           if isinstance(v, (int, float))},
-    }, f, indent=2, cls=_NumpyEncoder)
+    json.dump(
+        {
+            "timestamp": datetime.now().isoformat(),
+            "seg_source": seg_path.name,
+            "n_features": len(all_features),
+            "shape": shape_feats,
+            "subregion_ratios": ratio_feats,
+            "intensity": intensity_summary,
+            "classification": classification,
+            "who_metrics": who_metrics,
+            "all_features": {k: v for k, v in all_features.items() if isinstance(v, (int, float))},
+        },
+        f,
+        indent=2,
+        cls=_NumpyEncoder,
+    )
 print(f"  Features saved → {feat_path}")
 
 # Save radiomics features as .npy for training pipeline
-_numeric_feats = {k: v for k, v in all_features.items()
-                  if isinstance(v, (int, float))}
+_numeric_feats = {k: v for k, v in all_features.items() if isinstance(v, (int, float))}
 _feat_keys = sorted(_numeric_feats.keys())
-_feat_vals = np.array([float(_numeric_feats[k]) for k in _feat_keys],
-                      dtype=np.float32)
+_feat_vals = np.array([float(_numeric_feats[k]) for k in _feat_keys], dtype=np.float32)
 rad_npy_path = OUTPUT_DIR / "radiomics_features.npy"  # type: ignore
 np.save(str(rad_npy_path), _feat_vals)
 print(f"  Radiomics .npy  → {rad_npy_path}  ({len(_feat_vals)} features)")
@@ -1057,14 +1118,13 @@ with open(rpt_path, "w") as f:
         f.write(f"  {k}: {v}\n")
     f.write("\nINTENSITY SUMMARY:\n")
     for seq, vals in intensity_summary.items():
-        f.write(f"  {seq}: mean={vals['mean']}  std={vals['std']}  "
-                f"skew={vals['skew']}  entropy={vals['ent']}\n")
+        f.write(f"  {seq}: mean={vals['mean']}  std={vals['std']}  skew={vals['skew']}  entropy={vals['ent']}\n")
     f.write("\nDISCLAIMER:\n")
     f.write("These are research estimates based on imaging features only.\n")
     f.write("Definitive diagnosis REQUIRES histopathological biopsy.\n")
     f.write("Not for clinical use.\n")
 print(f"  Report saved   → {rpt_path}")
 
-print(f"""
+print("""
   Run generate_report.py to include these findings in the PDF.
 """)

@@ -10,11 +10,12 @@ import torch.nn.functional as F
 
 # ── PY-BRAIN session loader ──────────────────────────────────────────
 import sys as _sys
+
 _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
     from scripts.session_loader import get_session, get_paths, get_patient
 except ImportError:
-    from session_loader import get_session, get_paths, get_patient
+    from session_loader import get_session, get_paths
 
 _sess = get_session()
 _paths = get_paths(_sess)
@@ -113,7 +114,7 @@ def normalize_state_dict_keys(state_dict):
         nk = k
         for prefix in ("module.", "model.", "net."):
             if nk.startswith(prefix):
-                nk = nk[len(prefix):]
+                nk = nk[len(prefix) :]
         out[nk] = v
     return out
 
@@ -206,17 +207,14 @@ def write_report(idh_prob: float, logit: float, t1c_path: Path, flair_path: Opti
 
     data["classification"]["idh_mutation"] = {
         "most_likely": "Mutant" if idh_prob > 0.5 else "Wildtype",
-        "confidence": f"{max(idh_prob, 1-idh_prob)*100:.1f}%",
+        "confidence": f"{max(idh_prob, 1 - idh_prob) * 100:.1f}%",
         "interpretation": (
             "IDH-mutant suggests better prognosis."
             if idh_prob > 0.5
             else "IDH-wildtype suggests more aggressive behavior."
-        )
+        ),
     }
-    data["classification"]["high_grade"] = {
-        "probability": None,
-        "prediction": "Not available from IDH-only model"
-    }
+    data["classification"]["high_grade"] = {"probability": None, "prediction": "Not available from IDH-only model"}
 
     with open(report_path, "w") as f:
         json.dump(data, f, indent=4)
@@ -244,10 +242,7 @@ def main():
     flair_path = resolve_input_path(flair_candidates)
 
     if t1c_path is None:
-        raise FileNotFoundError(
-            "No T1ce input found. Expected one of:\n"
-            + "\n".join(str(p) for p in t1c_candidates)
-        )
+        raise FileNotFoundError("No T1ce input found. Expected one of:\n" + "\n".join(str(p) for p in t1c_candidates))
 
     device = choose_device()
     print(f"Using device: {device}")

@@ -20,9 +20,12 @@ Run:  python3 scripts/10_enhanced_visualisation.py
 import os
 import sys
 from pathlib import Path
-from typing import Any, cast, Dict, List
+from typing import Any, cast, Dict
 import warnings
-warnings.filterwarnings("ignore")
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*torch.meshgrid.*")
 
 # ── pybrain Imports ───────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -32,25 +35,33 @@ try:
     from pybrain.io.config import get_config
 except ImportError:
     # Linter satisfaction fallback
-    def get_session(): return {}
-    def get_paths(s): return {}
-    def get_config(): return {}
+    def get_session():
+        return {}
 
-sess    = get_session()
-paths   = get_paths(sess)
-CONFIG  = get_config()
+    def get_paths(s):
+        return {}
+
+    def get_config():
+        return {}
+
+
+sess = get_session()
+paths = get_paths(sess)
+CONFIG = get_config()
 VIZ_CFG = CONFIG.get("visualizations", {})
-MONAI   = Path(str(paths.get("monai_dir", PROJECT_ROOT)))
-EXTRA   = Path(str(paths.get("extra_dir", PROJECT_ROOT)))
-OUT     = Path(str(paths.get("output_dir", PROJECT_ROOT)))
+MONAI = Path(str(paths.get("monai_dir", PROJECT_ROOT)))
+EXTRA = Path(str(paths.get("extra_dir", PROJECT_ROOT)))
+OUT = Path(str(paths.get("output_dir", PROJECT_ROOT)))
 _pat_dict: Any = sess.get("patient", {}) if isinstance(sess, dict) else {}
 PATIENT: Dict[str, Any] = cast(Dict[str, Any], _pat_dict)
 
 # typing already imported at top
 import numpy as np
 import nibabel as nib
+
 try:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
@@ -61,6 +72,7 @@ except ImportError as e:
 
 try:
     import plotly.graph_objects as go
+
     HAS_PLOTLY = True
 except ImportError:
     HAS_PLOTLY = False
@@ -68,6 +80,7 @@ except ImportError:
 
 try:
     from skimage import measure
+
     HAS_SKIMAGE = True
 except ImportError:
     HAS_SKIMAGE = False
@@ -107,26 +120,26 @@ def best_slices_n(mask, axis=2, n=6):
 
 def get_sl(arr, axis, idx):
     """Get slice from array along specified axis with bounds checking."""
-    if axis == 0: 
+    if axis == 0:
         if idx >= arr.shape[0]:
             idx = arr.shape[0] - 1
         return arr[idx, :, :].T
-    if axis == 1: 
+    if axis == 1:
         if idx >= arr.shape[1]:
             idx = arr.shape[1] - 1
         return arr[:, idx, :].T
-    if axis == 2: 
+    if axis == 2:
         if idx >= arr.shape[2]:
             idx = arr.shape[2] - 1
         return arr[:, :, idx].T
 
 
 def make_rgba_cmap(hex_color):
-    r, g, b = (int(hex_color[i:i+2], 16)/255 for i in (1, 3, 5))
-    return LinearSegmentedColormap.from_list(
-        "", [(r, g, b, 0), (r, g, b, 0.75)])
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    return LinearSegmentedColormap.from_list("", [(r, g, b, 0), (r, g, b, 0.75)])
 
-def rescale_intensity(arr, out_range=(0,1)):
+
+def rescale_intensity(arr, out_range=(0, 1)):
     lo, hi = np.percentile(arr, 1), np.percentile(arr, 99)
     res = np.clip(arr, lo, hi)
     res = (res - lo) / (hi - lo + 1e-8)
@@ -141,34 +154,60 @@ def prompt_user(question: str, default: bool = True) -> bool:
 # ── Load volumes ──────────────────────────────────────────────────────────────
 banner("LOADING VOLUMES")
 
-t1    = load_vol(MONAI / "t1_resampled.nii.gz")
-if t1 is None: t1 = load_vol(MONAI / "t1.nii.gz")
-t1c   = load_vol(MONAI / "t1c_resampled.nii.gz")
-t2    = load_vol(MONAI / "t2_resampled.nii.gz")
+# Candidate T1 references in priority order — we may need to switch to whichever
+# one matches the segmentation shape (Stage 3 may have been run against either
+# the resampled or the raw T1, depending on Stage 1b status at that time).
+_T1_CANDIDATES = [MONAI / "t1_resampled.nii.gz", MONAI / "t1.nii.gz"]
+t1 = None
+for _p in _T1_CANDIDATES:
+    if _p.exists():
+        t1 = load_vol(_p)
+        if t1 is not None:
+            break
+t1c = load_vol(MONAI / "t1c_resampled.nii.gz")
+t2 = load_vol(MONAI / "t2_resampled.nii.gz")
 flair = load_vol(MONAI / "flair_resampled.nii.gz")
 
 # Load best available segmentation
-seg: np.ndarray = np.zeros((1,1,1)) # type: ignore
+seg: np.ndarray = np.zeros((1, 1, 1))  # type: ignore
 prob: Any = None
 _found_seg = False
 # Check seg_dir from paths (standardized cross-stage fallback)
 seg_dir_context = Path(str(paths.get("seg_dir", OUT)))
-# Ensure segmentation matches MRI shape
+
+# NON-DESTRUCTIVE matching: never delete an upstream stage's outputs from a
+# downstream viewer script.  If the preferred T1 reference has a different
+# shape from the segmentation, try the alternative T1 candidate before giving
+# up.  This avoids losing 5–30 min of Stage 3 compute when Stage 1b state
+# changes between runs.
 for fname in ["segmentation_ct_merged.nii.gz", "segmentation_ensemble.nii.gz", "segmentation_full.nii.gz"]:
     p = seg_dir_context / fname
-    if p.exists():
-        seg_nib = nib.load(str(p))
-        _seg_vol = seg_nib.get_fdata()
-        if _seg_vol.shape != t1.shape:
-            print(f"  ⚠️  Found stale segmentation {fname} with mismatching shape ({_seg_vol.shape} vs MRI {t1.shape})")
-            print(f"  🗑️  Removing stale file: {fname}")
-            try: p.unlink()
-            except: pass
-            continue
+    if not p.exists():
+        continue
+    seg_nib = nib.load(str(p))
+    _seg_vol = seg_nib.get_fdata()
+    if t1 is not None and _seg_vol.shape == t1.shape:
         seg = _seg_vol.astype(np.uint8)
         print(f"  ✅ Using Segmentation: {fname}")
         _found_seg = True
         break
+    # Shape mismatch — try alternate T1 reference that matches the seg
+    _alt = None
+    for _p in _T1_CANDIDATES:
+        if not _p.exists():
+            continue
+        _cand = load_vol(_p)
+        if _cand is not None and _cand.shape == _seg_vol.shape:
+            _alt = (_cand, _p.name)
+            break
+    if _alt is not None:
+        t1 = _alt[0]
+        seg = _seg_vol.astype(np.uint8)
+        print(f"  ℹ️  Re-aligned T1 reference to {_alt[1]} (shape {t1.shape}) to match {fname}")
+        print(f"  ✅ Using Segmentation: {fname}")
+        _found_seg = True
+        break
+    print(f"  ⚠️  Skipping {fname}: shape {_seg_vol.shape} does not match any available T1 reference")
 
 _prob_vol = load_vol(seg_dir_context / "ensemble_probability.nii.gz")
 if _prob_vol is None:
@@ -187,15 +226,15 @@ prob_a: Any = prob
 whole: np.ndarray = np.array(seg_a > 0).astype(np.float32)
 ncr: np.ndarray = np.array(seg_a == 1).astype(np.float32)
 ed: np.ndarray = np.array(seg_a == 2).astype(np.float32)
-et: np.ndarray = np.array(seg_a == 3).astype(np.float32)
+et: np.ndarray = np.array(seg_a == 4).astype(np.float32)  # BraTS 2021: ET = label 4
 
-ref   = t1c if t1c is not None else t1
+ref = t1c if t1c is not None else t1
 
 bz = best_slice(whole, 2)
 by = best_slice(whole, 1)
 bx = best_slice(whole, 0)
 
-for v, n in [(t1,"T1"),(t1c,"T1c"),(t2,"T2"),(flair,"FLAIR")]:
+for v, n in [(t1, "T1"), (t1c, "T1c"), (t2, "T2"), (flair, "FLAIR")]:
     if v is not None:
         print(f"  {n:5s}: shape={v.shape}")
 print(f"  Best axial slice: {bz}")
@@ -206,17 +245,15 @@ print(f"  Best axial slice: {bz}")
 # ═════════════════════════════════════════════════════════════════════════
 banner("VIZ 1 — 4-PANEL MRI COMPARISON")
 
-mods = [m for m in [("T1",t1),("T1c",t1c),("T2",t2),("FLAIR",flair)]
-        if m[1] is not None]
+mods = [m for m in [("T1", t1), ("T1c", t1c), ("T2", t2), ("FLAIR", flair)] if m[1] is not None]
 n_sl = 6
 slices = best_slices_n(whole, axis=2, n=n_sl)
 
-fig, axes = plt.subplots(len(mods), n_sl,
-                          figsize=(n_sl*2.8, len(mods)*2.8),
-                          facecolor="#0a0a0a")
-_axes: Any = axes # Cast for linter satisfaction
-fig.suptitle(f"Multi-Modal MRI — {str(PATIENT.get('name','Patient'))}",
-             color="white", fontsize=12, y=1.01, fontweight="bold")
+fig, axes = plt.subplots(len(mods), n_sl, figsize=(n_sl * 2.8, len(mods) * 2.8), facecolor="#0a0a0a")
+_axes: Any = axes  # Cast for linter satisfaction
+fig.suptitle(
+    f"Multi-Modal MRI — {str(PATIENT.get('name', 'Patient'))}", color="white", fontsize=12, y=1.01, fontweight="bold"
+)
 
 for r, (name, vol) in enumerate(mods):
     for c, sl in enumerate(slices):
@@ -227,18 +264,15 @@ for r, (name, vol) in enumerate(mods):
         ax: Any = cast(Any, _row)[c]
         ax.axis("off")
         s = get_sl(vol, 2, sl)
-        ax.imshow(s, cmap="gray",
-                  vmin=np.percentile(s,1), vmax=np.percentile(s,99))
+        ax.imshow(s, cmap="gray", vmin=np.percentile(s, 1), vmax=np.percentile(s, 99))
         if c == 0:
-            ax.set_ylabel(name, color="white", fontsize=9,
-                          rotation=0, labelpad=40, va="center")
+            ax.set_ylabel(name, color="white", fontsize=9, rotation=0, labelpad=40, va="center")
         if r == 0:
             ax.set_title(f"z={sl}", color="#888", fontsize=8)
 
 plt.tight_layout(pad=0.3)
 out1 = OUT / "viz_4panel_mri.png"
-plt.savefig(str(out1), dpi=160, bbox_inches="tight",
-            facecolor=fig.get_facecolor())
+plt.savefig(str(out1), dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
 plt.close()
 print(f"  Saved → {out1}")
 
@@ -248,42 +282,40 @@ print(f"  Saved → {out1}")
 # ═════════════════════════════════════════════════════════════════════════
 banner("VIZ 2 — TUMOUR REGION OVERLAY")
 
-cmap_ed  = make_rgba_cmap("#44cc44")
+cmap_ed = make_rgba_cmap("#44cc44")
 cmap_ncr = make_rgba_cmap("#4488ff")
-cmap_et  = make_rgba_cmap("#ff4444")
+cmap_et = make_rgba_cmap("#ff4444")
 
-cols  = 5
-fig, axes = plt.subplots(3, cols, figsize=(cols*3, 9), facecolor="#0a0a0a")
+cols = 5
+fig, axes = plt.subplots(3, cols, figsize=(cols * 3, 9), facecolor="#0a0a0a")
 fig.suptitle(
-    f"Tumour Sub-regions — {PATIENT.get('name','Patient')}\n"
-    "🔵 Necrotic  🟢 Edema  🔴 Enhancing",
-    color="white", fontsize=11, y=1.02)
+    f"Tumour Sub-regions — {PATIENT.get('name', 'Patient')}\n🔵 Necrotic  🟢 Edema  🔴 Enhancing",
+    color="white",
+    fontsize=11,
+    y=1.02,
+)
 
-for row, (axis, centre, label) in enumerate(
-        [(2, bz, "Axial"), (1, by, "Coronal"), (0, bx, "Sagittal")]):
+for row, (axis, centre, label) in enumerate([(2, bz, "Axial"), (1, by, "Coronal"), (0, bx, "Sagittal")]):
     offsets = [-8, -4, 0, 4, 8]
     for ci, off in enumerate(offsets):
-        _shape: Any = getattr(ref, "shape", (0,0,0,0))
-        sl = max(0, min(centre + off, int(_shape[axis])-1))
+        _shape: Any = getattr(ref, "shape", (0, 0, 0, 0))
+        sl = max(0, min(centre + off, int(_shape[axis]) - 1))
         _axes2: Any = axes
         _row2: Any = _axes2[row]
         ax: Any = _row2[ci]
         ax.axis("off")
         bg = get_sl(ref, axis, sl)
-        ax.imshow(bg, cmap="gray",
-                  vmin=np.percentile(bg,1), vmax=np.percentile(bg,99))
+        ax.imshow(bg, cmap="gray", vmin=np.percentile(bg, 1), vmax=np.percentile(bg, 99))
         for mask, cm in [(ed, cmap_ed), (ncr, cmap_ncr), (et, cmap_et)]:
             m = get_sl(mask, axis, sl)
             if m.max() > 0:
                 ax.imshow(m, cmap=cm, vmin=0, vmax=1)
         if ci == 0:
-            ax.set_ylabel(label, color="white", fontsize=9,
-                          rotation=0, labelpad=45, va="center")
+            ax.set_ylabel(label, color="white", fontsize=9, rotation=0, labelpad=45, va="center")
 
 plt.tight_layout(pad=0.3)
 out2 = OUT / "viz_region_overlay.png"
-plt.savefig(str(out2), dpi=160, bbox_inches="tight",
-            facecolor=fig.get_facecolor())
+plt.savefig(str(out2), dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
 plt.close()
 print(f"  Saved → {out2}")
 
@@ -294,16 +326,14 @@ print(f"  Saved → {out2}")
 banner("VIZ 3 — INTENSITY DISTRIBUTIONS")
 
 regions = [
-    ("Edema",     ed,    "#44cc44"),
-    ("Necrotic",  ncr,   "#4488ff"),
-    ("Enhancing", et,    "#ff4444"),
-    ("Whole",     whole, "#aaaaaa"),
+    ("Edema", ed, "#44cc44"),
+    ("Necrotic", ncr, "#4488ff"),
+    ("Enhancing", et, "#ff4444"),
+    ("Whole", whole, "#aaaaaa"),
 ]
 
-fig, axes = plt.subplots(2, len(mods), figsize=(len(mods)*4, 8),
-                          facecolor="#0d0d0d")
-fig.suptitle("Signal Intensity per Tumour Sub-region",
-             color="white", fontsize=12, y=1.01)
+fig, axes = plt.subplots(2, len(mods), figsize=(len(mods) * 4, 8), facecolor="#0d0d0d")
+fig.suptitle("Signal Intensity per Tumour Sub-region", color="white", fontsize=12, y=1.01)
 
 for ci, (mod_name, vol) in enumerate(mods):
     _axes_flat: Any = axes
@@ -319,12 +349,9 @@ for ci, (mod_name, vol) in enumerate(mods):
             continue
         _vol: Any = cast(Any, vol)
         vals = _vol[mask.astype(bool)]
-        vals = vals[(vals > np.percentile(vals,1)) &
-                    (vals < np.percentile(vals,99))]
-        ax0.hist(vals, bins=60, alpha=0.55, color=color,
-                 label=rname, density=True, histtype="stepfilled")
-    ax0.legend(fontsize=7, labelcolor="white",
-               facecolor="#222", edgecolor="#333")
+        vals = vals[(vals > np.percentile(vals, 1)) & (vals < np.percentile(vals, 99))]
+        ax0.hist(vals, bins=60, alpha=0.55, color=color, label=rname, density=True, histtype="stepfilled")
+    ax0.legend(fontsize=7, labelcolor="white", facecolor="#222", edgecolor="#333")
     ax0.set_xlabel("Intensity", color="#aaa", fontsize=7)
 
     _axes_bot: Any = axes
@@ -343,7 +370,7 @@ for ci, (mod_name, vol) in enumerate(mods):
         # Ensure we have enough data points for boxplot
         if len(vals) == 0:
             continue
-        bdata.append(vals[::max(1, len(vals)//2000)])
+        bdata.append(vals[:: max(1, len(vals) // 2000)])
         blabels.append(rname)
         bcolors.append(color)
 
@@ -351,22 +378,26 @@ for ci, (mod_name, vol) in enumerate(mods):
     if len(bdata) > 0 and len(blabels) > 0 and len(bdata) == len(blabels):
         _medprops: Any = {"color": "white", "linewidth": 2}
         _ax1: Any = ax1
-        bp = _ax1.boxplot(bdata, labels=blabels, patch_artist=True, notch=False,
-                         medianprops=_medprops)
+        bp = _ax1.boxplot(bdata, labels=blabels, patch_artist=True, notch=False, medianprops=_medprops)
         for patch, color in zip(bp["boxes"], bcolors):
             patch.set_facecolor(color)
             patch.set_alpha(0.7)
-        ax1.set_xticklabels(blabels, rotation=20, ha="right",
-                             color="white", fontsize=7)
+        ax1.set_xticklabels(blabels, rotation=20, ha="right", color="white", fontsize=7)
     else:
-        ax1.text(0.5, 0.5, "No data available for boxplot", 
-                transform=ax1.transAxes, ha="center", va="center", 
-                color="white", fontsize=8)
+        ax1.text(
+            0.5,
+            0.5,
+            "No data available for boxplot",
+            transform=ax1.transAxes,
+            ha="center",
+            va="center",
+            color="white",
+            fontsize=8,
+        )
 
 plt.tight_layout(pad=1.0)
 out3 = OUT / "viz_intensity_distributions.png"
-plt.savefig(str(out3), dpi=150, bbox_inches="tight",
-            facecolor=fig.get_facecolor())
+plt.savefig(str(out3), dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
 plt.close()
 print(f"  Saved → {out3}")
 
@@ -379,62 +410,55 @@ if prob is not None:
     n_att = 8
     att_sl = best_slices_n(whole, axis=2, n=n_att)
 
-    fig, _axes = plt.subplots(2, n_att, figsize=(n_att*2.5, 5),
-                              facecolor="#0a0a0a")
+    fig, _axes = plt.subplots(2, n_att, figsize=(n_att * 2.5, 5), facecolor="#0a0a0a")
     axes: Any = _axes
-    fig.suptitle("Model Prediction Confidence — Probability Gradient",
-                 color="white", fontsize=11, y=1.02)
+    fig.suptitle("Model Prediction Confidence — Probability Gradient", color="white", fontsize=11, y=1.02)
 
     for ci, sl in enumerate(att_sl):
-        bg   = get_sl(ref, 2, sl)
-        pr   = get_sl(prob, 2, sl)
-        sg   = get_sl(seg, 2, sl)
+        bg = get_sl(ref, 2, sl)
+        pr = get_sl(prob, 2, sl)
+        sg = get_sl(seg, 2, sl)
 
         _axes_heat: Any = axes
         ax0_obj: Any = _axes_heat[0]
         ax0: Any = ax0_obj[ci]
         ax0.axis("off")
-        ax0.imshow(bg, cmap="gray",
-                   vmin=np.percentile(bg,1), vmax=np.percentile(bg,99))
+        ax0.imshow(bg, cmap="gray", vmin=np.percentile(bg, 1), vmax=np.percentile(bg, 99))
         ax0.imshow(pr, cmap="hot", alpha=0.5, vmin=pr.min(), vmax=pr.max())
         ax0.set_title(f"z={sl}", color="#888", fontsize=7)
         if ci == 0:
-            ax0.set_ylabel("Confidence", color="white", fontsize=8,
-                           rotation=0, labelpad=45, va="center")
+            ax0.set_ylabel("Confidence", color="white", fontsize=8, rotation=0, labelpad=45, va="center")
 
         ax1_obj_heat: Any = _axes_heat[1]
         ax1: Any = ax1_obj_heat[ci]
         ax1.axis("off")
-        ax1.imshow(bg, cmap="gray",
-                   vmin=np.percentile(bg,1), vmax=np.percentile(bg,99))
-        for lbl, color in [(2,"#44cc44"),(1,"#4488ff"),(3,"#ff4444")]:
-                m = (sg == lbl)
-                # Clarify types for linter
-                m_f = np.array(m).astype(np.float32)
-                rgba = np.zeros(tuple(list(m_f.shape) + [4]), dtype=np.float32)
-                
-                # Parse hex colour via bytes.fromhex — avoids str-slice TypeVar linter issue
-                _c_str_obj: Any = color
-                _c_hex: str = str(_c_str_obj).replace("#", "")
-                _rgb_bytes: bytes = bytes.fromhex(_c_hex)
-                r_v: float = _rgb_bytes[0] / 255.0
-                g_v: float = _rgb_bytes[1] / 255.0
-                b_v: float = _rgb_bytes[2] / 255.0
-                
-                rgba[..., 0] = r_v
-                rgba[..., 1] = g_v
-                rgba[..., 2] = b_v
-                rgba[..., 3] = (m_f * 0.7)
-                _ax1_a: Any = ax1
-                _ax1_a.imshow(rgba)
+        ax1.imshow(bg, cmap="gray", vmin=np.percentile(bg, 1), vmax=np.percentile(bg, 99))
+        for lbl, color in [(2, "#44cc44"), (1, "#4488ff"), (3, "#ff4444")]:
+            m = sg == lbl
+            # Clarify types for linter
+            m_f = np.array(m).astype(np.float32)
+            rgba = np.zeros(tuple(list(m_f.shape) + [4]), dtype=np.float32)
+
+            # Parse hex colour via bytes.fromhex — avoids str-slice TypeVar linter issue
+            _c_str_obj: Any = color
+            _c_hex: str = str(_c_str_obj).replace("#", "")
+            _rgb_bytes: bytes = bytes.fromhex(_c_hex)
+            r_v: float = _rgb_bytes[0] / 255.0
+            g_v: float = _rgb_bytes[1] / 255.0
+            b_v: float = _rgb_bytes[2] / 255.0
+
+            rgba[..., 0] = r_v
+            rgba[..., 1] = g_v
+            rgba[..., 2] = b_v
+            rgba[..., 3] = m_f * 0.7
+            _ax1_a: Any = ax1
+            _ax1_a.imshow(rgba)
         if ci == 0:
-            ax1.set_ylabel("Segmentation", color="white", fontsize=8,
-                           rotation=0, labelpad=45, va="center")
+            ax1.set_ylabel("Segmentation", color="white", fontsize=8, rotation=0, labelpad=45, va="center")
 
     plt.tight_layout(pad=0.2)
     out4 = OUT / "viz_attention_heatmap.png"
-    plt.savefig(str(out4), dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
+    plt.savefig(str(out4), dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close()
     print(f"  Saved → {out4}")
 else:
@@ -449,40 +473,52 @@ banner("VIZ 5 — 3D SURFACE MESH")
 
 if HAS_PLOTLY and HAS_SKIMAGE:
     try:
-        nib_hdr   = nib.load(str(MONAI / "t1.nii.gz")).header
+        nib_hdr = nib.load(str(MONAI / "t1.nii.gz")).header
         vox_sizes = tuple(float(v) for v in nib_hdr.get_zooms()[:3])
 
         fig3d = go.Figure()
         meshes = [
-            ("Edema",     ed,    0.25, "#44cc44"),
-            ("Necrotic",  ncr,   0.55, "#4488ff"),
-            ("Enhancing", et,    0.80, "#ff4444"),
+            ("Edema", ed, 0.25, "#44cc44"),
+            ("Necrotic", ncr, 0.55, "#4488ff"),
+            ("Enhancing", et, 0.80, "#ff4444"),
         ]
         for rname, mask, opacity, color in meshes:
             if mask.sum() < 50:
                 continue
             smooth = ndimage.gaussian_filter(mask.astype(float), sigma=1.5)
             try:
-                verts, faces, _, _ = measure.marching_cubes(
-                    smooth, level=0.5, spacing=vox_sizes)
+                verts, faces, _, _ = measure.marching_cubes(smooth, level=0.5, spacing=vox_sizes)
             except Exception:
                 continue
-            x, y, z = verts[:,0], verts[:,1], verts[:,2]
-            i, j, k = faces[:,0], faces[:,1], faces[:,2]
-            fig3d.add_trace(go.Mesh3d(
-                x=x, y=y, z=z, i=i, j=j, k=k,
-                color=color, opacity=opacity,
-                name=rname, showlegend=True,
-                hovertemplate=f"<b>{rname}</b><extra></extra>",
-            ))
+            x, y, z = verts[:, 0], verts[:, 1], verts[:, 2]
+            i, j, k = faces[:, 0], faces[:, 1], faces[:, 2]
+            fig3d.add_trace(
+                go.Mesh3d(
+                    x=x,
+                    y=y,
+                    z=z,
+                    i=i,
+                    j=j,
+                    k=k,
+                    color=color,
+                    opacity=opacity,
+                    name=rname,
+                    showlegend=True,
+                    hovertemplate=f"<b>{rname}</b><extra></extra>",
+                )
+            )
 
         fig3d.update_layout(
             title={
-                "text": (f"3D Tumour Surface — {str(PATIENT.get('name','Patient'))}<br>"
-                         "<span style='font-size:10px;color:#aaa'>"
-                         "🔵 Necrotic  🟢 Edema  🔴 Enhancing | "
-                         "Drag to rotate · Scroll to zoom</span>"),
-                "x": 0.5, "font": {"color": "white", "size": 12}},
+                "text": (
+                    f"3D Tumour Surface — {str(PATIENT.get('name', 'Patient'))}<br>"
+                    "<span style='font-size:10px;color:#aaa'>"
+                    "🔵 Necrotic  🟢 Edema  🔴 Enhancing | "
+                    "Drag to rotate · Scroll to zoom</span>"
+                ),
+                "x": 0.5,
+                "font": {"color": "white", "size": 12},
+            },
             scene={
                 "xaxis": {"title": "X mm", "color": "white", "showgrid": False},
                 "yaxis": {"title": "Y mm", "color": "white", "showgrid": False},
@@ -490,9 +526,9 @@ if HAS_PLOTLY and HAS_SKIMAGE:
                 "bgcolor": "#111",
                 "camera": {"eye": {"x": 1.5, "y": 1.5, "z": 1.0}},
             },
-            paper_bgcolor="#111", height=650,
-            legend={"font": {"color": "white"},
-                    "bgcolor": "#222", "bordercolor": "#444"},
+            paper_bgcolor="#111",
+            height=650,
+            legend={"font": {"color": "white"}, "bgcolor": "#222", "bordercolor": "#444"},
             margin={"l": 0, "r": 0, "t": 80, "b": 0},
         )
         out5 = OUT / "viz_3d_surface.html"
@@ -533,7 +569,7 @@ if HAS_SKIMAGE:
         if hdr_path is None:
             raise RuntimeError("No T1 volume found")
 
-        nib_hdr   = nib.load(str(hdr_path))
+        nib_hdr = nib.load(str(hdr_path))
         vox_sizes = tuple(float(v) for v in nib_hdr.get_zooms()[:3])
 
         # Normalise all volumes to same space using seg shape as reference
@@ -549,11 +585,9 @@ if HAS_SKIMAGE:
             """Extract marching-cubes mesh; return (verts, faces) or (None, None)."""
             if mask_vol.sum() < 20:
                 return None, None
-            smooth = ndimage.gaussian_filter(
-                mask_vol.astype(np.float32), sigma=1.0)
+            smooth = ndimage.gaussian_filter(mask_vol.astype(np.float32), sigma=1.0)
             try:
-                verts, faces, _, _ = measure.marching_cubes(
-                    smooth, level=level, spacing=(1.0, 1.0, 1.0))
+                verts, faces, _, _ = measure.marching_cubes(smooth, level=level, spacing=(1.0, 1.0, 1.0))
                 return _to_mm(verts), faces
             except Exception:
                 return None, None
@@ -563,15 +597,15 @@ if HAS_SKIMAGE:
         brain_mask = (t1_norm > 0.15).astype(np.float32)
         brain_verts, brain_faces = _get_mesh(brain_mask, 0.5, "Brain")
 
-        ed_verts, ed_faces     = _get_mesh(ed, 0.5, "Edema")
-        ncr_verts, ncr_faces   = _get_mesh(ncr, 0.5, "Necrotic")
-        et_verts, et_faces     = _get_mesh(et, 0.5, "Enhancing")
+        ed_verts, ed_faces = _get_mesh(ed, 0.5, "Edema")
+        ncr_verts, ncr_faces = _get_mesh(ncr, 0.5, "Necrotic")
+        et_verts, et_faces = _get_mesh(et, 0.5, "Enhancing")
 
         # Centroid for cross-section view (whole tumour)
         if whole.sum() > 0:
             coords = np.argwhere(whole > 0)
             centroid_vox = coords.mean(axis=0)
-            centroid_mm  = _to_mm(centroid_vox)
+            centroid_mm = _to_mm(centroid_vox)
         else:
             centroid_mm = np.array([s * v / 2 for s, v in zip(vol_shape, vox_sizes)])
 
@@ -582,16 +616,13 @@ if HAS_SKIMAGE:
         ls = LightSource(azdeg=315, altdeg=45)
 
         # ── Left panel: Full 3D surface view ───────────────────────────
-        ax1 = fig.add_subplot(1, 2, 1, projection='3d', facecolor="#1a1a2e")
+        ax1 = fig.add_subplot(1, 2, 1, projection="3d", facecolor="#1a1a2e")
         ax1.set_facecolor("#1a1a2e")
 
         def _add_surface(verts, faces, color, alpha, label, shade=True):
             if verts is None:
                 return
-            mesh = Poly3DCollection(
-                verts[faces], alpha=alpha,
-                linewidths=0.15, edgecolors=(0.2, 0.2, 0.2, 0.3)
-            )
+            mesh = Poly3DCollection(verts[faces], alpha=alpha, linewidths=0.15, edgecolors=(0.2, 0.2, 0.2, 0.3))
             if shade and len(verts) > 0:
                 normals = _compute_normals(verts, faces)
                 col = ls.shade_samples(verts, normals, color)
@@ -618,20 +649,16 @@ if HAS_SKIMAGE:
             return normals / norms_mag
 
         # Brain surface (light gray, semi-transparent)
-        _add_surface(brain_verts, brain_faces,
-                      (0.85, 0.82, 0.80), 0.20, "Brain")
+        _add_surface(brain_verts, brain_faces, (0.85, 0.82, 0.80), 0.20, "Brain")
 
         # Edema (green)
-        _add_surface(ed_verts, ed_faces,
-                      (0.27, 0.87, 0.27), 0.65, "Edema")
+        _add_surface(ed_verts, ed_faces, (0.27, 0.87, 0.27), 0.65, "Edema")
 
         # Necrotic core (blue)
-        _add_surface(ncr_verts, ncr_faces,
-                      (0.27, 0.53, 1.00), 0.75, "Necrotic")
+        _add_surface(ncr_verts, ncr_faces, (0.27, 0.53, 1.00), 0.75, "Necrotic")
 
         # Enhancing tumour (red)
-        _add_surface(et_verts, et_faces,
-                      (1.00, 0.27, 0.27), 0.85, "Enhancing")
+        _add_surface(et_verts, et_faces, (1.00, 0.27, 0.27), 0.85, "Enhancing")
 
         # Set axis limits based on brain volume extent
         if brain_verts is not None:
@@ -643,33 +670,44 @@ if HAS_SKIMAGE:
         ax1.set_ylabel("A ← → P (mm)", fontsize=8, color="#aaa")
         ax1.set_zlabel("S ← → I (mm)", fontsize=8, color="#aaa")
         ax1.tick_params(colors="#888", labelsize=7)
-        ax1.set_xticks([]); ax1.set_yticks([]); ax1.set_zticks([])
+        ax1.set_xticks([])
+        ax1.set_yticks([])
+        ax1.set_zticks([])
 
         # Title overlay
         ax1.set_title(
             f"Surgical Navigation — 3D Reconstruction\n"
             f"{str(PATIENT.get('name', 'Patient'))}  |  "
             f"Surface rendering: brain + tumour sub-regions",
-            color="white", fontsize=10, pad=10
+            color="white",
+            fontsize=10,
+            pad=10,
         )
 
         # Legend patches (manual proxy artists)
         from matplotlib.patches import Patch
+
         legend_patches = [
-            Patch(facecolor=(1.0, 0.27, 0.27, 0.85), label='Enhancing Tumour (ET)'),
-            Patch(facecolor=(0.27, 0.53, 1.00, 0.75), label='Necrotic Core (NCR)'),
-            Patch(facecolor=(0.27, 0.87, 0.27, 0.65), label='Peritumoural Edema (ED)'),
-            Patch(facecolor=(0.85, 0.82, 0.80, 0.20), label='Brain Surface'),
+            Patch(facecolor=(1.0, 0.27, 0.27, 0.85), label="Enhancing Tumour (ET)"),
+            Patch(facecolor=(0.27, 0.53, 1.00, 0.75), label="Necrotic Core (NCR)"),
+            Patch(facecolor=(0.27, 0.87, 0.27, 0.65), label="Peritumoural Edema (ED)"),
+            Patch(facecolor=(0.85, 0.82, 0.80, 0.20), label="Brain Surface"),
         ]
-        ax1.legend(handles=legend_patches, loc='upper left',
-                   fontsize=7, facecolor="#222", edgecolor="#444",
-                   label_color="white", ncol=1)
+        ax1.legend(
+            handles=legend_patches,
+            loc="upper left",
+            fontsize=7,
+            facecolor="#222",
+            edgecolor="#444",
+            label_color="white",
+            ncol=1,
+        )
 
         # Camera angle — slightly from above-left for depth perception
         ax1.view_init(azim=40, elev=25)
 
         # ── Right panel: Cross-section view with depth scale ───────────
-        ax2 = fig.add_subplot(1, 2, 2, projection='3d', facecolor="#1a1a2e")
+        ax2 = fig.add_subplot(1, 2, 2, projection="3d", facecolor="#1a1a2e")
         ax2.set_facecolor("#1a1a2e")
 
         # Get sagittal slice index nearest centroid
@@ -679,27 +717,24 @@ if HAS_SKIMAGE:
             """Add a 2D slice as a textured quad in 3D."""
             if axis == 0:
                 sl = arr[idx, :, :]
-                xx, yy = _to_mm(np.meshgrid(
-                    np.arange(sl.shape[1]), np.arange(sl.shape[0])))
+                xx, yy = _to_mm(np.meshgrid(np.arange(sl.shape[1]), np.arange(sl.shape[0])))
                 zz = np.full_like(xx, arr.shape[0] * vox_sizes[0] / 2)
-                normal = (1, 0, 0)
             elif axis == 1:
                 sl = arr[:, idx, :]
-                xx, yy = _to_mm(np.meshgrid(
-                    np.arange(sl.shape[1]), np.arange(sl.shape[0])))
+                xx, yy = _to_mm(np.meshgrid(np.arange(sl.shape[1]), np.arange(sl.shape[0])))
                 zz = np.full_like(xx, arr.shape[1] * vox_sizes[1] / 2)
-                normal = (0, 1, 0)
             else:
                 sl = arr[:, :, idx]
-                xx, yy = _to_mm(np.meshgrid(
-                    np.arange(sl.shape[1]), np.arange(sl.shape[0])))
+                xx, yy = _to_mm(np.meshgrid(np.arange(sl.shape[1]), np.arange(sl.shape[0])))
                 zz = np.full_like(xx, arr.shape[2] * vox_sizes[2] / 2)
-                normal = (0, 0, 1)
 
             sl_norm = np.clip((sl - vmin) / (vmax - vmin + 1e-8), 0, 1)
-            ax2_surface = ax2.plot_surface(
-                xx, yy, zz,
-                rstride=4, cstride=4,
+            ax2.plot_surface(
+                xx,
+                yy,
+                zz,
+                rstride=4,
+                cstride=4,
                 facecolors=cmap(sl_norm),
                 linewidths=0,
                 shade=False,
@@ -709,26 +744,28 @@ if HAS_SKIMAGE:
 
         # T1 sagittal cross-section at centroid
         if t1_a is not None:
-            t1_slice = t1_a[sagittal_idx, :, :] if sagittal_idx < t1_a.shape[0] \
-                       else t1_a[-1, :, :]
-            t1_min, t1_max = np.percentile(t1_slice[t1_slice > 0], [2, 98]) \
-                              if t1_slice.max() > 0 else (0, 1)
-            xx_sag, yy_sag = _to_mm(np.meshgrid(
-                np.arange(t1_slice.shape[1]),
-                np.arange(t1_slice.shape[0])))
-            zz_sag = np.full_like(xx_sag,
-                sagittal_idx * vox_sizes[0])
+            t1_slice = t1_a[sagittal_idx, :, :] if sagittal_idx < t1_a.shape[0] else t1_a[-1, :, :]
+            t1_min, t1_max = np.percentile(t1_slice[t1_slice > 0], [2, 98]) if t1_slice.max() > 0 else (0, 1)
+            xx_sag, yy_sag = _to_mm(np.meshgrid(np.arange(t1_slice.shape[1]), np.arange(t1_slice.shape[0])))
+            zz_sag = np.full_like(xx_sag, sagittal_idx * vox_sizes[0])
             t1_s = np.clip((t1_slice - t1_min) / (t1_max - t1_min + 1e-8), 0, 1)
-            ax2.plot_surface(xx_sag, yy_sag, zz_sag,
-                             rstride=3, cstride=3,
-                             facecolors=plt.cm.gray(t1_s),
-                             linewidths=0, shade=False, alpha=0.9)
+            ax2.plot_surface(
+                xx_sag,
+                yy_sag,
+                zz_sag,
+                rstride=3,
+                cstride=3,
+                facecolors=plt.cm.gray(t1_s),
+                linewidths=0,
+                shade=False,
+                alpha=0.9,
+            )
 
         # Overlay tumour region colours on the cross-section
         for reg_mask, reg_color, reg_name in [
-            (ed,  (0.27, 0.87, 0.27, 0.5), "Edema"),
+            (ed, (0.27, 0.87, 0.27, 0.5), "Edema"),
             (ncr, (0.27, 0.53, 1.00, 0.6), "NCR"),
-            (et,  (1.00, 0.27, 0.27, 0.7), "ET"),
+            (et, (1.00, 0.27, 0.27, 0.7), "ET"),
         ]:
             if sagittal_idx < reg_mask.shape[0]:
                 sl = reg_mask[sagittal_idx, :, :]
@@ -738,9 +775,7 @@ if HAS_SKIMAGE:
                         xm = _to_mm(xs)
                         ym = _to_mm(ys)
                         zm = np.full_like(xm, sagittal_idx * vox_sizes[0])
-                        ax2.scatter(xm, ym, zm,
-                                   c=[reg_color[:3]], s=3,
-                                   alpha=reg_color[3], marker='o')
+                        ax2.scatter(xm, ym, zm, c=[reg_color[:3]], s=3, alpha=reg_color[3], marker="o")
 
         # Depth ruler — vertical line showing scale
         x_ruler = brain_verts[:, 0].min() - 15 if brain_verts is not None else -10
@@ -751,20 +786,27 @@ if HAS_SKIMAGE:
             (z_ruler, z_ruler + 20 / vox_sizes[2], "20 mm"),
             (z_ruler, z_ruler + 50 / vox_sizes[2], "50 mm"),
         ]:
-            ax2.plot([x_ruler, x_ruler],
-                     [y_ruler, y_ruler],
-                     [z_ruler, y1],
-                     color='white', linewidth=1.5)
+            ax2.plot([x_ruler, x_ruler], [y_ruler, y_ruler], [z_ruler, y1], color="white", linewidth=1.5)
             mid_z = (z_ruler + y1) / 2
-            ax2.text(x_ruler - 2, y_ruler, mid_z,
-                     f"{int((y1 - z_ruler) * vox_sizes[2])} mm",
-                     color='white', fontsize=7, va='center')
+            ax2.text(
+                x_ruler - 2,
+                y_ruler,
+                mid_z,
+                f"{int((y1 - z_ruler) * vox_sizes[2])} mm",
+                color="white",
+                fontsize=7,
+                va="center",
+            )
 
         # Centroid marker
-        ax2.scatter(*[_to_mm(centroid_vox)],
-                    c='yellow', s=60, marker='*', zorder=10,
-                    label=f"Tumour centroid (RAS: "
-                          f"R={centroid_mm[0]:.0f} A={centroid_mm[1]:.0f} S={centroid_mm[2]:.0f})")
+        ax2.scatter(
+            *[_to_mm(centroid_vox)],
+            c="yellow",
+            s=60,
+            marker="*",
+            zorder=10,
+            label=f"Tumour centroid (RAS: R={centroid_mm[0]:.0f} A={centroid_mm[1]:.0f} S={centroid_mm[2]:.0f})",
+        )
 
         if brain_verts is not None:
             ax2.set_xlim(brain_verts[:, 0].min(), brain_verts[:, 0].max())
@@ -775,32 +817,41 @@ if HAS_SKIMAGE:
         ax2.set_ylabel("A ← → P (mm)", fontsize=8, color="#aaa")
         ax2.set_zlabel("S ← → I (mm)", fontsize=8, color="#aaa")
         ax2.tick_params(colors="#888", labelsize=7)
-        ax2.set_xticks([]); ax2.set_yticks([]); ax2.set_zticks([])
+        ax2.set_xticks([])
+        ax2.set_yticks([])
+        ax2.set_zticks([])
 
         ax2.set_title(
             f"Sagittal Cross-Section at Tumour Centroid\n"
             f"RAS: R={centroid_mm[0]:.0f}mm  A={centroid_mm[1]:.0f}mm  "
             f"S={centroid_mm[2]:.0f}mm  |  Slice z={sagittal_idx}",
-            color="white", fontsize=10, pad=10
+            color="white",
+            fontsize=10,
+            pad=10,
         )
         ax2.view_init(azim=90, elev=0)  # Pure sagittal view
 
         # Add a horizontal depth scale bar
-        fig.text(0.5, 0.02,
-                 "Surgical Navigation 3D — PY-BRAIN Research Pipeline  |  "
-                 " BrainIAC Brain Tumor Analysis  |  "
-                 "FOR RESEARCH USE ONLY — NOT FOR CLINICAL DIAGNOSIS",
-                 ha="center", fontsize=7, color="#666", style="italic")
+        fig.text(
+            0.5,
+            0.02,
+            "Surgical Navigation 3D — PY-BRAIN Research Pipeline  |  "
+            " BrainIAC Brain Tumor Analysis  |  "
+            "FOR RESEARCH USE ONLY — NOT FOR CLINICAL DIAGNOSIS",
+            ha="center",
+            fontsize=7,
+            color="#666",
+            style="italic",
+        )
 
         plt.tight_layout(pad=1.5)
-        fig.savefig(str(out5b_path), dpi=150,
-                    bbox_inches="tight",
-                    facecolor=fig.get_facecolor())
+        fig.savefig(str(out5b_path), dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close()
         print(f"  Saved → {out5b_path}")
 
     except Exception as e:
         import traceback
+
         print(f"  ⚠️  Surgical 3D failed: {e}")
         traceback.print_exc()
         out5b_path = None
@@ -818,77 +869,132 @@ if gen_anim:
 
 if gen_anim and HAS_PLOTLY and ref is not None:
     _ref: Any = ref  # narrowed non-None reference for linter
-    n_z    = _ref.shape[2]
-    t_sl   = [z for z in range(n_z) if whole[:,:,z].sum() > 5]
+    n_z = _ref.shape[2]
+    t_sl = [z for z in range(n_z) if whole[:, :, z].sum() > 5]
     if not t_sl:
-        t_sl = list(range(n_z//4, 3*n_z//4))
+        t_sl = list(range(n_z // 4, 3 * n_z // 4))
 
     frames = []
     for sl in t_sl:
-        bg   = get_sl(_ref,  2, sl)
-        n_s  = get_sl(ncr,   2, sl)
-        e_s  = get_sl(ed,    2, sl)
-        et_s = get_sl(et,    2, sl)
-        frames.append(go.Frame(data=[
-            go.Heatmap(z=bg[::-1], colorscale="gray", showscale=False,
-                       zmin=float(np.percentile(bg,1)),
-                       zmax=float(np.percentile(bg,99))),
-            go.Heatmap(z=np.where(e_s[::-1]  >0, 1.0, np.nan),
-                       colorscale=[[0,"#44cc44"],[1,"#44cc44"]],
-                       showscale=False, opacity=0.45),
-            go.Heatmap(z=np.where(n_s[::-1]  >0, 1.0, np.nan),
-                       colorscale=[[0,"#4488ff"],[1,"#4488ff"]],
-                       showscale=False, opacity=0.60),
-            go.Heatmap(z=np.where(et_s[::-1] >0, 1.0, np.nan),
-                       colorscale=[[0,"#ff4444"],[1,"#ff4444"]],
-                       showscale=False, opacity=0.70),
-        ], name=str(sl)))
+        bg = get_sl(_ref, 2, sl)
+        n_s = get_sl(ncr, 2, sl)
+        e_s = get_sl(ed, 2, sl)
+        et_s = get_sl(et, 2, sl)
+        frames.append(
+            go.Frame(
+                data=[
+                    go.Heatmap(
+                        z=bg[::-1],
+                        colorscale="gray",
+                        showscale=False,
+                        zmin=float(np.percentile(bg, 1)),
+                        zmax=float(np.percentile(bg, 99)),
+                    ),
+                    go.Heatmap(
+                        z=np.where(e_s[::-1] > 0, 1.0, np.nan),
+                        colorscale=[[0, "#44cc44"], [1, "#44cc44"]],
+                        showscale=False,
+                        opacity=0.45,
+                    ),
+                    go.Heatmap(
+                        z=np.where(n_s[::-1] > 0, 1.0, np.nan),
+                        colorscale=[[0, "#4488ff"], [1, "#4488ff"]],
+                        showscale=False,
+                        opacity=0.60,
+                    ),
+                    go.Heatmap(
+                        z=np.where(et_s[::-1] > 0, 1.0, np.nan),
+                        colorscale=[[0, "#ff4444"], [1, "#ff4444"]],
+                        showscale=False,
+                        opacity=0.70,
+                    ),
+                ],
+                name=str(sl),
+            )
+        )
 
-    mid  = t_sl[len(t_sl)//2]
-    bg0  = get_sl(_ref, 2, mid)
-    steps = [{"args": [[str(sl)], {"frame": {"duration": 0}, "mode": "immediate"}],
-               "label": str(sl), "method": "animate"} for sl in t_sl]
+    mid = t_sl[len(t_sl) // 2]
+    bg0 = get_sl(_ref, 2, mid)
+    steps = [
+        {"args": [[str(sl)], {"frame": {"duration": 0}, "mode": "immediate"}], "label": str(sl), "method": "animate"}
+        for sl in t_sl
+    ]
 
     fig_anim = go.Figure(
         data=[
-            go.Heatmap(z=bg0[::-1], colorscale="gray", showscale=False,
-                       zmin=float(np.percentile(bg0,1)),
-                       zmax=float(np.percentile(bg0,99)),
-                       name=str(mid)),
-            go.Heatmap(z=np.where(get_sl(ed, 2,mid)[::-1]  >0,1.,np.nan),
-                       colorscale=[[0,"#44cc44"],[1,"#44cc44"]],
-                       showscale=False, opacity=0.45),
-            go.Heatmap(z=np.where(get_sl(ncr,2,mid)[::-1]  >0,1.,np.nan),
-                       colorscale=[[0,"#4488ff"],[1,"#4488ff"]],
-                       showscale=False, opacity=0.60),
-            go.Heatmap(z=np.where(get_sl(et, 2,mid)[::-1]  >0,1.,np.nan),
-                       colorscale=[[0,"#ff4444"],[1,"#ff4444"]],
-                       showscale=False, opacity=0.70),
+            go.Heatmap(
+                z=bg0[::-1],
+                colorscale="gray",
+                showscale=False,
+                zmin=float(np.percentile(bg0, 1)),
+                zmax=float(np.percentile(bg0, 99)),
+                name=str(mid),
+            ),
+            go.Heatmap(
+                z=np.where(get_sl(ed, 2, mid)[::-1] > 0, 1.0, np.nan),
+                colorscale=[[0, "#44cc44"], [1, "#44cc44"]],
+                showscale=False,
+                opacity=0.45,
+            ),
+            go.Heatmap(
+                z=np.where(get_sl(ncr, 2, mid)[::-1] > 0, 1.0, np.nan),
+                colorscale=[[0, "#4488ff"], [1, "#4488ff"]],
+                showscale=False,
+                opacity=0.60,
+            ),
+            go.Heatmap(
+                z=np.where(get_sl(et, 2, mid)[::-1] > 0, 1.0, np.nan),
+                colorscale=[[0, "#ff4444"], [1, "#ff4444"]],
+                showscale=False,
+                opacity=0.70,
+            ),
         ],
         frames=frames,
     )
     fig_anim.update_layout(
         title={
-            "text": (f"Slice Viewer — {PATIENT.get('name','Patient')}<br>"
-                     "<span style='font-size:10px;color:#aaa'>"
-                     "🟢 Edema  🔵 Necrotic  🔴 Enhancing | ▶ Play or drag slider</span>"),
-            "x": 0.5, "font": {"color": "white", "size": 12}},
-        paper_bgcolor="#111", plot_bgcolor="#111",
-        sliders=[{
-            "active": len(steps)//2, "steps": steps, "pad": {"t": 50},
-            "currentvalue": {"prefix": "Slice: ",
-                             "font": {"color": "white", "size": 13}},
-            "font": {"color": "white"}}],
-        updatemenus=[{
-            "type": "buttons", "showactive": False, "y": 1.18, "x": 0.5,
-            "xanchor": "center",
-            "buttons": [
-                {"label": "▶ Play", "method": "animate",
-                 "args": [None, {"frame": {"duration": 80}, "fromcurrent": True}]},
-                {"label": "⏸ Pause", "method": "animate",
-                 "args": [[None], {"frame": {"duration": 0}, "mode": "immediate"}]},
-            ]}],
-        height=680, width=720,
+            "text": (
+                f"Slice Viewer — {PATIENT.get('name', 'Patient')}<br>"
+                "<span style='font-size:10px;color:#aaa'>"
+                "🟢 Edema  🔵 Necrotic  🔴 Enhancing | ▶ Play or drag slider</span>"
+            ),
+            "x": 0.5,
+            "font": {"color": "white", "size": 12},
+        },
+        paper_bgcolor="#111",
+        plot_bgcolor="#111",
+        sliders=[
+            {
+                "active": len(steps) // 2,
+                "steps": steps,
+                "pad": {"t": 50},
+                "currentvalue": {"prefix": "Slice: ", "font": {"color": "white", "size": 13}},
+                "font": {"color": "white"},
+            }
+        ],
+        updatemenus=[
+            {
+                "type": "buttons",
+                "showactive": False,
+                "y": 1.18,
+                "x": 0.5,
+                "xanchor": "center",
+                "buttons": [
+                    {
+                        "label": "▶ Play",
+                        "method": "animate",
+                        "args": [None, {"frame": {"duration": 80}, "fromcurrent": True}],
+                    },
+                    {
+                        "label": "⏸ Pause",
+                        "method": "animate",
+                        "args": [[None], {"frame": {"duration": 0}, "mode": "immediate"}],
+                    },
+                ],
+            }
+        ],
+        height=680,
+        width=720,
         margin={"l": 20, "r": 20, "t": 100, "b": 90},
     )
     out6 = OUT / "viz_slice_animation.html"
@@ -910,37 +1016,36 @@ else:
 banner("DONE")
 
 for fname, desc in [
-    ("viz_4panel_mri.png",              "4-panel MRI comparison"),
-    ("viz_region_overlay.png",           "Region overlay — 3 orientations"),
-    ("viz_intensity_distributions.png",  "Intensity histograms + box plots"),
-    ("viz_attention_heatmap.png",        "AI attention heatmap"),
-    ("viz_3d_surface.html",             "3D surface — open in browser"),
-    ("viz_slice_animation.html",         "Slice animation — open in browser"),
-    ("viz_3d_surgical_navigation.png",  "Surgical navigation 3D (PDF-ready)"),
+    ("viz_4panel_mri.png", "4-panel MRI comparison"),
+    ("viz_region_overlay.png", "Region overlay — 3 orientations"),
+    ("viz_intensity_distributions.png", "Intensity histograms + box plots"),
+    ("viz_attention_heatmap.png", "AI attention heatmap"),
+    ("viz_3d_surface.html", "3D surface — open in browser"),
+    ("viz_slice_animation.html", "Slice animation — open in browser"),
+    ("viz_3d_surgical_navigation.png", "Surgical navigation 3D (PDF-ready)"),
 ]:
     p = OUT / fname
     if p.exists():
-        size = p.stat().st_size/1024
-        print(f"  ✅ {fname:<42} "
-              f"{'%.1f MB' % (size/1024) if size>1024 else '%.0f KB' % size}")
+        size = p.stat().st_size / 1024
+        print(f"  ✅ {fname:<42} {'%.1f MB' % (size / 1024) if size > 1024 else '%.0f KB' % size}")
     else:
         print(f"  ⚠️  {fname:<42} not created")
 
-print(f"\n  Open 3D surface:  open \"{OUT}/viz_3d_surface.html\"")
-print(f"  Open animation:   open \"{OUT}/viz_slice_animation.html\"")
+print(f'\n  Open 3D surface:  open "{OUT}/viz_3d_surface.html"')
+print(f'  Open animation:   open "{OUT}/viz_slice_animation.html"')
 
 # Automatically open in browser (macOS)
 if sys.platform == "darwin":
     auto_open = VIZ_CFG.get("auto_open", True)
     if auto_open:
         auto_open = prompt_user("Open interactive visualizations in browser?", default=True)
-    
+
     if auto_open:
         if out5 and out5.exists():
             os.system(f"open '{out5}'")
         if out6 and out6.exists():
             os.system(f"open '{out6}'")
 
-print("═"*65)
+print("═" * 65)
 print("  ✅  Stage 10 done")
-print("═"*65)
+print("═" * 65)

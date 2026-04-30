@@ -32,7 +32,6 @@ import nibabel as nib
 import numpy as np
 import torch
 from sklearn.linear_model import LogisticRegression
-from sklearn.calibration import calibration_curve
 
 # ── Resolve project root so we can import pybrain ────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,6 +47,7 @@ from pybrain.core.normalization import zscore_robust
 # =============================================================================
 # BraTS label → subregion binary mask
 # =============================================================================
+
 
 def brats_seg_to_channels(seg: np.ndarray) -> np.ndarray:
     """
@@ -67,18 +67,19 @@ def brats_seg_to_channels(seg: np.ndarray) -> np.ndarray:
     tc = ((seg == 1) | (seg == 4)).astype(np.float32)
     wt = ((seg == 1) | (seg == 2) | (seg == 4)).astype(np.float32)
     et = (seg == 4).astype(np.float32)
-    return np.stack([tc, wt, et], axis=0)   # (3, D, H, W)
+    return np.stack([tc, wt, et], axis=0)  # (3, D, H, W)
 
 
 # =============================================================================
 # Preprocessing — mirrors preprocess_volumes() in the pipeline
 # =============================================================================
 
+
 def make_brain_mask(volumes: Dict[str, np.ndarray]) -> np.ndarray:
     """Non-zero union across all modalities."""
     mask = np.zeros(next(iter(volumes.values())).shape, dtype=bool)
     for v in volumes.values():
-        mask |= (v > 0)
+        mask |= v > 0
     return mask.astype(np.float32)
 
 
@@ -92,9 +93,9 @@ def preprocess_brats_case(case_dir: Path) -> Tuple[torch.Tensor, np.ndarray, np.
     cid = case_dir.name
     volumes = {
         "FLAIR": nib.load(str(case_dir / f"{cid}_flair.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
-        "T1":    nib.load(str(case_dir / f"{cid}_t1.nii.gz")).get_fdata().astype(np.float32),    # type: ignore[union-attr]
-        "T1c":   nib.load(str(case_dir / f"{cid}_t1ce.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
-        "T2":    nib.load(str(case_dir / f"{cid}_t2.nii.gz")).get_fdata().astype(np.float32),    # type: ignore[union-attr]
+        "T1": nib.load(str(case_dir / f"{cid}_t1.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
+        "T1c": nib.load(str(case_dir / f"{cid}_t1ce.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
+        "T2": nib.load(str(case_dir / f"{cid}_t2.nii.gz")).get_fdata().astype(np.float32),  # type: ignore[union-attr]
     }
     seg = nib.load(str(case_dir / f"{cid}_seg.nii.gz")).get_fdata().astype(np.int32)  # type: ignore[union-attr]
 
@@ -119,6 +120,7 @@ def preprocess_brats_case(case_dir: Path) -> Tuple[torch.Tensor, np.ndarray, np.
 # Dice score
 # =============================================================================
 
+
 def dice_score(pred_bin: np.ndarray, gt_bin: np.ndarray) -> float:
     """Binary Dice coefficient. Returns 1.0 if both are empty."""
     intersection = float((pred_bin * gt_bin).sum())
@@ -131,6 +133,7 @@ def dice_score(pred_bin: np.ndarray, gt_bin: np.ndarray) -> float:
 # =============================================================================
 # Per-model inference (no ensemble)
 # =============================================================================
+
 
 def run_single_model(
     model_name: str,
@@ -146,9 +149,7 @@ def run_single_model(
     try:
         if model_name == "segresnet":
             model = load_segresnet(bundle_dir, model_device)
-            prob = run_segresnet_inference(
-                model, input_tensor, model_device, model_cfg, model_device=model_device
-            )
+            prob = run_segresnet_inference(model, input_tensor, model_device, model_cfg, model_device=model_device)
             del model
             gc.collect()
             return prob
@@ -156,17 +157,13 @@ def run_single_model(
         if model_name == "tta4":
             # TTA-4 uses the same SegResNet weights — 4-flip average
             model = load_segresnet(bundle_dir, model_device)
-            prob = run_tta_ensemble(
-                model, input_tensor, model_device, model_cfg, model_device=model_device
-            )
+            prob = run_tta_ensemble(model, input_tensor, model_device, model_cfg, model_device=model_device)
             del model
             gc.collect()
             return prob
 
         if model_name == "swinunetr":
-            prob = run_swinunetr_inference(
-                input_tensor, bundle_dir, model_device, model_cfg=model_cfg
-            )
+            prob = run_swinunetr_inference(input_tensor, bundle_dir, model_device, model_cfg=model_cfg)
             return prob
 
     except Exception as exc:
@@ -180,21 +177,29 @@ def run_single_model(
 # Main calibration loop
 # =============================================================================
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compute Platt calibration + ensemble weights")
-    parser.add_argument("--brats_dir",  required=True,  type=Path)
-    parser.add_argument("--bundle_dir", required=True,  type=Path)
-    parser.add_argument("--n_cases",    default=50,     type=int,
-                        help="Number of cases to process (max 1251). 50 is sufficient.")
-    parser.add_argument("--device",     default="cpu",  type=str)
-    parser.add_argument("--out_dir",    default="models/calibration", type=Path)
-    parser.add_argument("--seed",       default=42,     type=int)
-    parser.add_argument("--skip_swinunetr", action="store_true",
-                        help="Skip SwinUNETR inference (much faster; Platt fitted on SegResNet only). "
-                             "Use when SwinUNETR Dice on full volumes is low or inference is too slow.")
-    parser.add_argument("--skip_tta4", action="store_true",
-                        help="Skip TTA-4 inference. By default TTA-4 is measured to compute its "
-                             "Dice independently from SegResNet. Skipping saves ~2x SegResNet time per case.")
+    parser.add_argument("--brats_dir", required=True, type=Path)
+    parser.add_argument("--bundle_dir", required=True, type=Path)
+    parser.add_argument(
+        "--n_cases", default=50, type=int, help="Number of cases to process (max 1251). 50 is sufficient."
+    )
+    parser.add_argument("--device", default="cpu", type=str)
+    parser.add_argument("--out_dir", default="models/calibration", type=Path)
+    parser.add_argument("--seed", default=42, type=int)
+    parser.add_argument(
+        "--skip_swinunetr",
+        action="store_true",
+        help="Skip SwinUNETR inference (much faster; Platt fitted on SegResNet only). "
+        "Use when SwinUNETR Dice on full volumes is low or inference is too slow.",
+    )
+    parser.add_argument(
+        "--skip_tta4",
+        action="store_true",
+        help="Skip TTA-4 inference. By default TTA-4 is measured to compute its "
+        "Dice independently from SegResNet. Skipping saves ~2x SegResNet time per case.",
+    )
     args = parser.parse_args()
 
     setup_logging()
@@ -204,10 +209,7 @@ def main() -> None:
     device = torch.device(args.device)
 
     # ── Collect all case directories ──────────────────────────────────────────
-    all_cases = sorted([
-        p for p in args.brats_dir.iterdir()
-        if p.is_dir() and (p / f"{p.name}_seg.nii.gz").exists()
-    ])
+    all_cases = sorted([p for p in args.brats_dir.iterdir() if p.is_dir() and (p / f"{p.name}_seg.nii.gz").exists()])
     logger.info(f"Found {len(all_cases)} valid BraTS cases")
 
     random.seed(args.seed)
@@ -228,7 +230,7 @@ def main() -> None:
     # Accumulators for Platt fitting
     # For each channel: list of (flat_prob, flat_gt) tuples across all cases
     all_probs: Dict[str, List[np.ndarray]] = {c: [] for c in channel_names}
-    all_gts:   Dict[str, List[np.ndarray]] = {c: [] for c in channel_names}
+    all_gts: Dict[str, List[np.ndarray]] = {c: [] for c in channel_names}
 
     # Accumulators for per-model Dice
     dice_records: List[dict] = []
@@ -237,10 +239,7 @@ def main() -> None:
         active_models.insert(2, "swinunetr")
     if args.skip_tta4:
         active_models.remove("tta4")
-    per_model_dice: Dict[str, Dict[str, List[float]]] = {
-        m: {c: [] for c in channel_names}
-        for m in active_models
-    }
+    per_model_dice: Dict[str, Dict[str, List[float]]] = {m: {c: [] for c in channel_names} for m in active_models}
     if args.skip_swinunetr:
         logger.info("--skip_swinunetr: SwinUNETR inference will be skipped.")
     if args.skip_tta4:
@@ -251,7 +250,7 @@ def main() -> None:
     # ── Per-case loop ─────────────────────────────────────────────────────────
     for case_idx, case_dir in enumerate(cases):
         cid = case_dir.name
-        logger.info(f"\n[{case_idx+1}/{len(cases)}] {cid}")
+        logger.info(f"\n[{case_idx + 1}/{len(cases)}] {cid}")
 
         try:
             input_tensor, brain_mask, gt_channels = preprocess_brats_case(case_dir)
@@ -292,10 +291,7 @@ def main() -> None:
             continue
 
         # ── Ensemble ──────────────────────────────────────────────────────────
-        model_list = [
-            (name, prob, ensemble_weights.get(name, 1.0))
-            for name, prob in model_probs.items()
-        ]
+        model_list = [(name, prob, ensemble_weights.get(name, 1.0)) for name, prob in model_probs.items()]
         ensemble_prob, _ = run_weighted_ensemble(model_list)
 
         # ── Measure Dice per model per channel ────────────────────────────────
@@ -311,19 +307,19 @@ def main() -> None:
 
         dice_records.append(case_dice)
         logger.info(
-            f"  Dice — SR: WT={case_dice.get('segresnet_wt_dice','?'):.3f} "
-            f"TC={case_dice.get('segresnet_tc_dice','?'):.3f} "
-            f"ET={case_dice.get('segresnet_et_dice','?'):.3f} | "
-            f"ENS: WT={case_dice.get('ensemble_wt_dice','?'):.3f} "
-            f"TC={case_dice.get('ensemble_tc_dice','?'):.3f} "
-            f"ET={case_dice.get('ensemble_et_dice','?'):.3f}"
+            f"  Dice — SR: WT={case_dice.get('segresnet_wt_dice', '?'):.3f} "
+            f"TC={case_dice.get('segresnet_tc_dice', '?'):.3f} "
+            f"ET={case_dice.get('segresnet_et_dice', '?'):.3f} | "
+            f"ENS: WT={case_dice.get('ensemble_wt_dice', '?'):.3f} "
+            f"TC={case_dice.get('ensemble_tc_dice', '?'):.3f} "
+            f"ET={case_dice.get('ensemble_et_dice', '?'):.3f}"
         )
 
         # ── Collect probability + GT for Platt fitting ────────────────────────
         # Sample at most 50k voxels per case to keep memory manageable
         flat_mask = brain_mask.astype(bool).ravel()
-        n_voxels  = flat_mask.sum()
-        max_vox   = 50_000
+        n_voxels = flat_mask.sum()
+        max_vox = 50_000
         if n_voxels > max_vox:
             idx = np.where(flat_mask)[0]
             chosen = np.random.choice(idx, size=max_vox, replace=False)
@@ -331,7 +327,7 @@ def main() -> None:
             chosen = np.where(flat_mask)[0]
 
         for ch_idx, ch_name in enumerate(channel_names):
-            p_flat  = ensemble_prob[ch_idx].ravel()[chosen]
+            p_flat = ensemble_prob[ch_idx].ravel()[chosen]
             gt_flat = gt_channels[ch_idx].ravel()[chosen]
             all_probs[ch_name].append(p_flat)
             all_gts[ch_name].append(gt_flat)
@@ -345,12 +341,12 @@ def main() -> None:
             torch.cuda.empty_cache()
 
     # ── Fit Platt calibration ─────────────────────────────────────────────────
-    logger.info("\n" + "="*60)
+    logger.info("\n" + "=" * 60)
     logger.info("Fitting Platt calibration...")
     platt_coefficients: dict = {}
 
     for ch_name in channel_names:
-        p_all  = np.concatenate(all_probs[ch_name])
+        p_all = np.concatenate(all_probs[ch_name])
         gt_all = np.concatenate(all_gts[ch_name])
 
         # Need both positive and negative examples
@@ -403,7 +399,7 @@ def main() -> None:
 
     total = sum(model_overall.values()) + 1e-8
     normalised_weights = {m: round(v / total, 4) for m, v in model_overall.items()}
-    normalised_weights["nnunet"] = 0.0   # Always 0 until weights provided
+    normalised_weights["nnunet"] = 0.0  # Always 0 until weights provided
 
     logger.info(f"\nRecommended ensemble_weights: {normalised_weights}")
 
@@ -413,15 +409,19 @@ def main() -> None:
         json.dump(platt_coefficients, f, indent=2)
     logger.info(f"\nPlatt coefficients saved → {platt_path}")
     logger.info(f"  Copy to: {args.bundle_dir.parent}/platt_coefficients.json")
-    logger.info(f"  (apply_platt_calibration reads from output_dir.parent/platt_coefficients.json)")
+    logger.info("  (apply_platt_calibration reads from output_dir.parent/platt_coefficients.json)")
 
     weights_path = args.out_dir / "ensemble_weights.json"
     with open(weights_path, "w") as f:
-        json.dump({
-            "recommended_ensemble_weights": normalised_weights,
-            "mean_dice_per_model": mean_dice,
-            "n_cases": len(dice_records),
-        }, f, indent=2)
+        json.dump(
+            {
+                "recommended_ensemble_weights": normalised_weights,
+                "mean_dice_per_model": mean_dice,
+                "n_cases": len(dice_records),
+            },
+            f,
+            indent=2,
+        )
     logger.info(f"Ensemble weights saved → {weights_path}")
 
     dice_path = args.out_dir / "per_model_dice.json"
@@ -430,22 +430,22 @@ def main() -> None:
     logger.info(f"Per-case Dice records saved → {dice_path}")
 
     # ── Print final summary ────────────────────────────────────────────────────
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("CALIBRATION COMPLETE")
-    print("="*60)
+    print("=" * 60)
     print(f"\nCases processed: {len(dice_records)}")
     print("\nPlatt coefficients:")
     for ch, coeff in platt_coefficients.items():
-        print(f"  {ch.upper()}: A={coeff.get('A','-'):.4f}  B={coeff.get('B','-'):.4f}")
+        print(f"  {ch.upper()}: A={coeff.get('A', '-'):.4f}  B={coeff.get('B', '-'):.4f}")
     print("\nRecommended ensemble_weights (copy to defaults.yaml):")
     for m, w in normalised_weights.items():
         print(f"  {m}: {w}")
     print("\nNext steps:")
     print(f"  1. Copy {platt_path}")
     print(f"     → {args.bundle_dir.parent}/platt_coefficients.json")
-    print(f"  2. Update ensemble_weights in config/defaults.yaml")
-    print(f"  3. Re-run regression suite: python tests/regression_baseline.py --device cpu")
-    print("="*60)
+    print("  2. Update ensemble_weights in config/defaults.yaml")
+    print("  3. Re-run regression suite: python tests/regression_baseline.py --device cpu")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ D: Combined overlay (T1c background, ET yellow, NCR red, ED green)
 """
 
 import sys
-import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,6 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from pybrain.io.session import get_session, get_paths
+
     sess = get_session()
     paths = get_paths(sess)
     MONAI_DIR = Path(paths["monai_dir"])
@@ -41,9 +41,7 @@ def load_volume(path):
 
 
 def load_segmentation(seg_dir):
-    for name in ["segmentation_ct_merged.nii.gz",
-                 "segmentation_ensemble.nii.gz",
-                 "segmentation_full.nii.gz"]:
+    for name in ["segmentation_ct_merged.nii.gz", "segmentation_ensemble.nii.gz", "segmentation_full.nii.gz"]:
         p = Path(seg_dir) / name
         if p.exists():
             return nib.load(str(p)).get_fdata().astype(np.uint8)
@@ -82,7 +80,7 @@ def main():
     # FIX 3: Maximize Tumor Core (ET + NCR), not whole tumor (which is edema-dominated).
     # Edema can be 5-10x larger than the core; argmax(WT) reliably selects
     # an edema-only slice where Panels A and B would be blank.
-    core_mask = ((seg == 1) | (seg == 3)).astype(np.float32)
+    core_mask = ((seg == 1) | (seg == 4)).astype(np.float32)  # BraTS 2021: ET = label 4
     if core_mask.sum() > 0:
         axial_scores = core_mask.sum(axis=(0, 1))
     else:
@@ -94,35 +92,30 @@ def main():
     print(f"  Selected axial slice: {best_z}  (maximised for tumour core)")
 
     # Extract slices
-    t1c_slice   = get_slice(t1c,   2, best_z)
-    t2_slice    = get_slice(t2,    2, best_z)
+    t1c_slice = get_slice(t1c, 2, best_z)
+    t2_slice = get_slice(t2, 2, best_z)
     flair_slice = get_slice(flair, 2, best_z)
-    seg_slice   = get_slice(seg,   2, best_z)
+    seg_slice = get_slice(seg, 2, best_z)
 
     # Masks
-    ncr   = (seg_slice == 1).astype(np.float32)
+    ncr = (seg_slice == 1).astype(np.float32)
     edema = (seg_slice == 2).astype(np.float32)
-    et    = (seg_slice == 3).astype(np.float32)
-    core  = ((ncr + et) > 0).astype(np.float32)
+    et = (seg_slice == 4).astype(np.float32)  # BraTS 2021: ET = label 4
+    core = ((ncr + et) > 0).astype(np.float32)
     whole = ((core + edema) > 0).astype(np.float32)
 
     # FIX 1: Explicit LinearSegmentedColormap with exact RGBA values.
     # Using cmap='YlOrBr'/'Reds'/'Greens' on boolean masks maps 1.0 to the
     # colormap's bright edge, producing dark/washed-out colours.
     # Solid RGBA + LinearSegmentedColormap gives precise, publication-grade colours.
-    cmap_et    = LinearSegmentedColormap.from_list(
-        'et',    [(0.0, 0.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.7)])   # Yellow
-    cmap_ncr   = LinearSegmentedColormap.from_list(
-        'ncr',   [(0.0, 0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.7)])  # Red
-    cmap_edema = LinearSegmentedColormap.from_list(
-        'edema', [(0.0, 0.0, 0.0, 0.0), (0.0, 0.8, 0.0, 0.5)])  # Green
-    cmap_core  = LinearSegmentedColormap.from_list(
-        'core',  [(0.0, 0.0, 0.0, 0.0), (1.0, 0.0, 1.0, 0.6)])  # Magenta
-    cmap_wt    = LinearSegmentedColormap.from_list(
-        'wt',    [(0.0, 0.0, 0.0, 0.0), (0.0, 1.0, 1.0, 0.4)])  # Cyan
+    cmap_et = LinearSegmentedColormap.from_list("et", [(0.0, 0.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.7)])  # Yellow
+    cmap_ncr = LinearSegmentedColormap.from_list("ncr", [(0.0, 0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.7)])  # Red
+    cmap_edema = LinearSegmentedColormap.from_list("edema", [(0.0, 0.0, 0.0, 0.0), (0.0, 0.8, 0.0, 0.5)])  # Green
+    cmap_core = LinearSegmentedColormap.from_list("core", [(0.0, 0.0, 0.0, 0.0), (1.0, 0.0, 1.0, 0.6)])  # Magenta
+    cmap_wt = LinearSegmentedColormap.from_list("wt", [(0.0, 0.0, 0.0, 0.0), (0.0, 1.0, 1.0, 0.4)])  # Cyan
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 12))
-    fig.patch.set_facecolor('black')
+    fig.patch.set_facecolor("black")
     axes = axes.flatten()
 
     def norm_img(img):
@@ -134,46 +127,35 @@ def main():
     # All overlays use vmin=0, vmax=1 with explicit RGBA colormaps (Fix 1).
 
     # Panel A: T1c + ET (Yellow) + NCR (Red)
-    axes[0].imshow(norm_img(t1c_slice), cmap='gray', interpolation='bicubic')
-    axes[0].imshow(np.ma.masked_where(et == 0, et),
-                    cmap=cmap_et, vmin=0, vmax=1, interpolation='none')
-    axes[0].imshow(np.ma.masked_where(ncr == 0, ncr),
-                    cmap=cmap_ncr, vmin=0, vmax=1, interpolation='none')
-    axes[0].set_title('A: Enhancing (yellow) + Necrosis (red)',
-                       color='white', fontsize=12, fontweight='bold')
-    axes[0].axis('off')
+    axes[0].imshow(norm_img(t1c_slice), cmap="gray", interpolation="bicubic")
+    axes[0].imshow(np.ma.masked_where(et == 0, et), cmap=cmap_et, vmin=0, vmax=1, interpolation="none")
+    axes[0].imshow(np.ma.masked_where(ncr == 0, ncr), cmap=cmap_ncr, vmin=0, vmax=1, interpolation="none")
+    axes[0].set_title("A: Enhancing (yellow) + Necrosis (red)", color="white", fontsize=12, fontweight="bold")
+    axes[0].axis("off")
 
     # Panel B: T2 + Tumor Core (Magenta)
-    axes[1].imshow(norm_img(t2_slice), cmap='gray', interpolation='bicubic')
-    axes[1].imshow(np.ma.masked_where(core == 0, core),
-                    cmap=cmap_core, vmin=0, vmax=1, interpolation='none')
-    axes[1].set_title('B: Tumour core (magenta) on T2',
-                       color='white', fontsize=12, fontweight='bold')
-    axes[1].axis('off')
+    axes[1].imshow(norm_img(t2_slice), cmap="gray", interpolation="bicubic")
+    axes[1].imshow(np.ma.masked_where(core == 0, core), cmap=cmap_core, vmin=0, vmax=1, interpolation="none")
+    axes[1].set_title("B: Tumour core (magenta) on T2", color="white", fontsize=12, fontweight="bold")
+    axes[1].axis("off")
 
     # Panel C: FLAIR + Whole Tumor (Cyan)
-    axes[2].imshow(norm_img(flair_slice), cmap='gray', interpolation='bicubic')
-    axes[2].imshow(np.ma.masked_where(whole == 0, whole),
-                    cmap=cmap_wt, vmin=0, vmax=1, interpolation='none')
-    axes[2].set_title('C: Whole tumour (cyan) on FLAIR',
-                       color='white', fontsize=12, fontweight='bold')
-    axes[2].axis('off')
+    axes[2].imshow(norm_img(flair_slice), cmap="gray", interpolation="bicubic")
+    axes[2].imshow(np.ma.masked_where(whole == 0, whole), cmap=cmap_wt, vmin=0, vmax=1, interpolation="none")
+    axes[2].set_title("C: Whole tumour (cyan) on FLAIR", color="white", fontsize=12, fontweight="bold")
+    axes[2].axis("off")
 
     # Panel D: Combined (T1c + ET + NCR + ED)
-    axes[3].imshow(norm_img(t1c_slice), cmap='gray', interpolation='bicubic')
-    axes[3].imshow(np.ma.masked_where(edema == 0, edema),
-                    cmap=cmap_edema, vmin=0, vmax=1, interpolation='none')
-    axes[3].imshow(np.ma.masked_where(et == 0, et),
-                    cmap=cmap_et, vmin=0, vmax=1, interpolation='none')
-    axes[3].imshow(np.ma.masked_where(ncr == 0, ncr),
-                    cmap=cmap_ncr, vmin=0, vmax=1, interpolation='none')
-    axes[3].set_title('D: Combined (yellow=ET, red=NCR, green=ED)',
-                       color='white', fontsize=12, fontweight='bold')
-    axes[3].axis('off')
+    axes[3].imshow(norm_img(t1c_slice), cmap="gray", interpolation="bicubic")
+    axes[3].imshow(np.ma.masked_where(edema == 0, edema), cmap=cmap_edema, vmin=0, vmax=1, interpolation="none")
+    axes[3].imshow(np.ma.masked_where(et == 0, et), cmap=cmap_et, vmin=0, vmax=1, interpolation="none")
+    axes[3].imshow(np.ma.masked_where(ncr == 0, ncr), cmap=cmap_ncr, vmin=0, vmax=1, interpolation="none")
+    axes[3].set_title("D: Combined (yellow=ET, red=NCR, green=ED)", color="white", fontsize=12, fontweight="bold")
+    axes[3].axis("off")
 
     plt.tight_layout(pad=0.5)
     out_path = OUTPUT_DIR / "brats_figure1_style.png"
-    plt.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='black')
+    plt.savefig(out_path, dpi=300, bbox_inches="tight", facecolor="black")
     plt.close()
     print(f"  ✅ Saved: {out_path}")
 

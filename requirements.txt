@@ -13,9 +13,9 @@ scikit-image
 scipy
 
 # Radiomics & Analysis
-pyradiomics
 scikit-learn
 pandas
+tabulate
 numpy<2.0.0
 
 # Reports & Visualization
@@ -26,5 +26,6 @@ rich
 
 # Utilities
 tqdm
+psutil
 PyYAML
 python-dotenv

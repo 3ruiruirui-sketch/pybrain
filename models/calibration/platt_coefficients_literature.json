@@ -1,0 +1,42 @@
+{
+  "tc": {
+    "A": 1.15,
+    "B": -0.23,
+    "method": "literature",
+    "fit_valid": true,
+    "n_samples": null,
+    "val_dice": null,
+    "note": "Mehrtash et al. 2020, Medical Image Analysis",
+    "source": "Mehrtash2020",
+    "temperature": null
+  },
+  "wt": {
+    "A": 1.08,
+    "B": -0.15,
+    "method": "literature",
+    "fit_valid": true,
+    "n_samples": null,
+    "val_dice": null,
+    "note": "Mehrtash et al. 2020, Medical Image Analysis",
+    "source": "Mehrtash2020",
+    "temperature": null
+  },
+  "et": {
+    "A": 0.95,
+    "B": -0.08,
+    "method": "literature",
+    "fit_valid": true,
+    "n_samples": null,
+    "val_dice": null,
+    "note": "Mehrtash et al. 2020, Medical Image Analysis",
+    "source": "Mehrtash2020",
+    "temperature": null
+  },
+  "metadata": {
+    "fitted_on": "BraTS Literature",
+    "date": "2026-04-13",
+    "pipeline_version": "3.0",
+    "type": "literature_fallback",
+    "description": "Conservative values from published BraTS calibration literature. These soften over-confident predictions slightly."
+  }
+}

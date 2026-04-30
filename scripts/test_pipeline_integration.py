@@ -19,18 +19,27 @@ from pathlib import Path
 
 # ── Session ──────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.session_loader import get_session, get_paths, get_patient
+from scripts.session_loader import get_session, get_paths
 
-_sess  = get_session()
+_sess = get_session()
 _paths = get_paths(_sess)
 OUTPUT_DIR = Path(_paths.get("output_dir", _paths["results_dir"]))
-MONAI_DIR  = Path(_paths["monai_dir"])
+MONAI_DIR = Path(_paths["monai_dir"])
 
 failures = []
 
-def ok(msg):    print(f"  ✅ {msg}")
-def fail(msg):  print(f"  ❌ {msg}"); failures.append(msg)
-def banner(t):  print("\n" + "═"*65 + f"\n  {t}\n" + "═"*65)
+
+def ok(msg):
+    print(f"  ✅ {msg}")
+
+
+def fail(msg):
+    print(f"  ❌ {msg}")
+    failures.append(msg)
+
+
+def banner(t):
+    print("\n" + "═" * 65 + f"\n  {t}\n" + "═" * 65)
 
 
 # ── BLOCK 1: Ensemble Output Files ───────────────────────────────────
@@ -137,7 +146,7 @@ try:
         fail(f"Reference T1 not found: {ref_path}")
     else:
         ref = nib.load(str(ref_path))
-        ref_shape  = ref.shape[:3]
+        ref_shape = ref.shape[:3]
         ref_affine = ref.affine
 
         for f in ["segmentation_ensemble.nii.gz", "ensemble_probability.nii.gz", "ensemble_uncertainty.nii.gz"]:
@@ -176,7 +185,7 @@ try:
         else:
             ok(f"Whole tumor voxels: {wt_vox:,}")
 
-        et_vox = int((seg == 3).sum())
+        et_vox = int((seg == 4).sum())  # BraTS 2021: ET = label 4
         nc_vox = int((seg == 1).sum())
         ed_vox = int((seg == 2).sum())
         ok(f"Necrotic={nc_vox:,}  Edema={ed_vox:,}  Enhancing={et_vox:,}")
@@ -190,9 +199,9 @@ banner("BLOCK 5 — Radiomics Inputs (8_radiomics_analysis.py)")
 
 RADIOMICS_INPUTS = {
     "segmentation_ensemble.nii.gz": "Primary mask (prefer)",
-    "segmentation_full.nii.gz":     "Fallback mask",
-    "ensemble_probability.nii.gz":  "Probability map",
-    "tumor_stats_ensemble.json":    "Volume reference",
+    "segmentation_full.nii.gz": "Fallback mask",
+    "ensemble_probability.nii.gz": "Probability map",
+    "tumor_stats_ensemble.json": "Volume reference",
 }
 for f, role in RADIOMICS_INPUTS.items():
     p = OUTPUT_DIR / f
@@ -202,9 +211,9 @@ for f, role in RADIOMICS_INPUTS.items():
         fail(f"{f} — {role} — MISSING")
 
 mri_files = {
-    "t1.nii.gz":            MONAI_DIR / "t1.nii.gz",
+    "t1.nii.gz": MONAI_DIR / "t1.nii.gz",
     "t1c_resampled.nii.gz": MONAI_DIR / "t1c_resampled.nii.gz",
-    "t2_resampled.nii.gz":  MONAI_DIR / "t2_resampled.nii.gz",
+    "t2_resampled.nii.gz": MONAI_DIR / "t2_resampled.nii.gz",
     "flair_resampled.nii.gz": MONAI_DIR / "flair_resampled.nii.gz",
 }
 for name, path in mri_files.items():
@@ -226,5 +235,5 @@ if failures:
     print()
     sys.exit(1)
 else:
-    print(f"\n  ✅ ALL CHECKS PASSED — Pipeline ready for 8_radiomics_analysis.py\n")
+    print("\n  ✅ ALL CHECKS PASSED — Pipeline ready for 8_radiomics_analysis.py\n")
     sys.exit(0)

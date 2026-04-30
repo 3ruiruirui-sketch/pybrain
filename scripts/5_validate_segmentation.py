@@ -25,8 +25,11 @@ import nibabel as nib
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from pybrain.core.labels import canonical_labels
+
 
 # ─── Metrics ───────────────────────────────────────────────────────────────────
+
 
 def dice_score(pred, gt, label):
     p = (pred == label).astype(np.float32)
@@ -39,7 +42,7 @@ def dice_per_label(pred, gt):
     """Dice for each BraTS label."""
     return {
         "necrotic": dice_score(pred, gt, 1),
-        "edema":    dice_score(pred, gt, 2),
+        "edema": dice_score(pred, gt, 2),
         "enhancing": dice_score(pred, gt, 3),
     }
 
@@ -55,6 +58,7 @@ def dice_wt(pred, gt):
 def hd95(pred, gt, spacing=None):
     try:
         from monai.metrics import compute_hausdorff_distance
+
         if not pred.any() or not gt.any():
             return float("nan")
         p = pred.astype(np.float32)[None, None, ...]
@@ -67,6 +71,7 @@ def hd95(pred, gt, spacing=None):
 def asd(pred, gt, spacing=None):
     try:
         from monai.metrics import compute_average_surface_distance
+
         if not pred.any() or not gt.any():
             return float("nan")
         p = pred.astype(np.float32)[None, None, ...]
@@ -78,13 +83,15 @@ def asd(pred, gt, spacing=None):
 
 # ─── Session helpers ────────────────────────────────────────────────────────────
 
+
 def _load_session():
     from pybrain.io.session import get_session, get_paths as _get_paths
     import os
+
     env_path = os.environ.get("PYBRAIN_SESSION")
     if env_path and Path(env_path).exists():
         with open(env_path) as f:
-            json.load(f)   # warm cache
+            json.load(f)  # warm cache
     sess = get_session()
     return sess, _get_paths
 
@@ -103,29 +110,13 @@ def _guess_gt(output_dir: Path) -> Optional[Path]:
 
 # ─── Core validation ───────────────────────────────────────────────────────────
 
-def _canonical_labels(arr: np.ndarray) -> np.ndarray:
-    """
-    Normalise a segmentation array to the pipeline label convention:
-      0 = background, 1 = necrotic core, 2 = edema, 3 = enhancing tumour.
-
-    BraTS 2021 training data uses label 4 for ET (label 3 is absent).
-    Pipeline output uses label 3 for ET.
-    This function remaps label 4 → 3 so both spaces can be compared directly.
-    Label 3 is left untouched (already in pipeline convention).
-    """
-    arr = arr.astype(np.int32)
-    if 4 in np.unique(arr):
-        arr = arr.copy()
-        arr[arr == 4] = 3
-    return arr
-
 
 def validate(pred_path: Path, gt_path: Path, out_dir: Optional[Path] = None) -> dict:
     pred_nii = nib.load(str(pred_path))
-    gt_nii   = nib.load(str(gt_path))
+    gt_nii = nib.load(str(gt_path))
 
     pred_img = pred_nii.get_fdata()
-    gt_img   = gt_nii.get_fdata()
+    gt_img = gt_nii.get_fdata()
 
     if pred_img.shape != gt_img.shape:
         raise ValueError(f"Shape mismatch: pred={pred_img.shape} gt={gt_img.shape}")
@@ -133,8 +124,8 @@ def validate(pred_path: Path, gt_path: Path, out_dir: Optional[Path] = None) -> 
     # Normalise label conventions: BraTS 2021 GT uses ET=4; pipeline output uses ET=3.
     # Remap both to the pipeline convention (ET=3) before any metric computation.
     # Without this, ET Dice is always 0 when comparing pipeline output vs BraTS 2021 GT.
-    pred_img = _canonical_labels(pred_img)
-    gt_img   = _canonical_labels(gt_img)
+    pred_img = canonical_labels(pred_img)
+    gt_img = canonical_labels(gt_img)
 
     # Voxel spacing for HD95/ASD (physical units in mm)
     spacing = tuple(float(x) for x in pred_nii.header.get_zooms()[:3])
@@ -147,25 +138,25 @@ def validate(pred_path: Path, gt_path: Path, out_dir: Optional[Path] = None) -> 
     # Volume comparison (cc)
     vox_cc = float(np.prod(spacing) / 1000.0)
     pred_vol = float((pred_img > 0).sum() * vox_cc)
-    gt_vol   = float((gt_img   > 0).sum() * vox_cc)
+    gt_vol = float((gt_img > 0).sum() * vox_cc)
     vol_diff_pct = float(abs(pred_vol - gt_vol) / (gt_vol + 1e-8) * 100)
 
     report = {
         "pred_path": str(pred_path),
-        "gt_path":   str(gt_path),
+        "gt_path": str(gt_path),
         "vox_size_mm": list(spacing),
         "vox_vol_cc": float(vox_cc),
         "dice": {
             "enhancing_tumour": float(dice_lab["enhancing"]),
-            "necrotic_core":     float(dice_lab["necrotic"]),
-            "edema":             float(dice_lab["edema"]),
-            "whole_tumour":      float(d_wt),
+            "necrotic_core": float(dice_lab["necrotic"]),
+            "edema": float(dice_lab["edema"]),
+            "whole_tumour": float(d_wt),
         },
-        "hausdorff95_mm":    round(float(h_wt), 2),
-        "avg_surface_mm":    round(float(a_wt), 2),
+        "hausdorff95_mm": round(float(h_wt), 2),
+        "avg_surface_mm": round(float(a_wt), 2),
         "volume_cc": {
             "pred": round(float(pred_vol), 2),
-            "gt":   round(float(gt_vol),   2),
+            "gt": round(float(gt_vol), 2),
             "diff_pct": round(float(vol_diff_pct), 2),
         },
     }
@@ -177,16 +168,16 @@ def validate(pred_path: Path, gt_path: Path, out_dir: Optional[Path] = None) -> 
 
 def _print_report(r: dict):
     dice = r["dice"]
-    vol  = r["volume_cc"]
-    print(f"\n{'='*50}")
+    vol = r["volume_cc"]
+    print(f"\n{'=' * 50}")
     print(f"{'SEGMENTATION VALIDATION REPORT':^50}")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     print(f"  Pred : {r['pred_path']}")
     print(f"  GT   : {r['gt_path']}")
     print(f"  Voxel size : {r['vox_size_mm']} mm  ({r['vox_vol_cc']:.4f} cc/voxel)")
     print()
     print(f"  {'Metric':<25} {'Value':>10}")
-    print(f"  {'-'*35}")
+    print(f"  {'-' * 35}")
     print(f"  {'Dice ET (enhancing)':<25} {dice['enhancing_tumour']:>10.4f}")
     print(f"  {'Dice TC (necrotic core)':<25} {dice['necrotic_core']:>10.4f}")
     print(f"  {'Dice ED (edema)':<25} {dice['edema']:>10.4f}")
@@ -196,7 +187,7 @@ def _print_report(r: dict):
     print()
     print(f"  Volume : pred={vol['pred']:.1f} cc  gt={vol['gt']:.1f} cc")
     print(f"            diff={vol['diff_pct']:.1f}%")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     grade = dice["whole_tumour"]
     if grade >= 0.8:
@@ -208,23 +199,25 @@ def _print_report(r: dict):
     else:
         quality = "POOR"
     print(f"  Overall quality: {quality} (Dice WT = {grade:.4f})")
-    print(f"{'='*50}\n")
+    print(f"{'=' * 50}\n")
 
 
 # ─── CLI / session mode ─────────────────────────────────────────────────────────
 
+
 def main():
     import os
+
     has_env_session = bool(os.environ.get("PYBRAIN_SESSION"))
 
     parser = argparse.ArgumentParser(description="BraTS Segmentation Validator")
     parser.add_argument("--pred", default=None, help="Predicted segmentation NIfTI path")
-    parser.add_argument("--gt",   default=None, help="Ground truth NIfTI path")
+    parser.add_argument("--gt", default=None, help="Ground truth NIfTI path")
     args = parser.parse_args()
 
     output_dir = None
-    pred_path  = None
-    gt_path    = None
+    pred_path = None
+    gt_path = None
 
     # ── Session mode ─────────────────────────────────────────────────────────────
     if args.pred is None and args.gt is None and has_env_session:
@@ -233,7 +226,7 @@ def main():
         output_dir = Path(paths["output_dir"])
 
         pred_path = output_dir / "segmentation_full.nii.gz"
-        gt_path   = _guess_gt(output_dir)
+        gt_path = _guess_gt(output_dir)
 
         if not pred_path.exists():
             alt = output_dir / "segmentation_ensemble.nii.gz"
@@ -257,7 +250,7 @@ def main():
     # ── CLI explicit mode ───────────────────────────────────────────────────────
     elif args.pred is not None and args.gt is not None:
         pred_path = Path(args.pred)
-        gt_path   = Path(args.gt)
+        gt_path = Path(args.gt)
         if not pred_path.exists():
             print(f"❌ Predicted not found: {pred_path}")
             sys.exit(1)

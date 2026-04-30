@@ -1,0 +1,6 @@
+{
+    "wt": {"threshold": 0.40, "n_cases": 0},
+    "tc": {"threshold": 0.35, "n_cases": 0},
+    "et": {"threshold": 0.35, "n_cases": 0},
+    "metadata": {"date": "2026-04-21", "n_cases": 0, "note": "regression fix"}
+}

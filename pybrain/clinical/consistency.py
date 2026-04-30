@@ -5,18 +5,15 @@ Biological plausibility and clinical consistency checks for brain tumor segmenta
 
 import numpy as np
 from scipy import ndimage
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, List
+
 
 def validate_clinical_consistency(
-    seg: np.ndarray, 
-    p_ensemble: np.ndarray, 
-    vox_vol_cc: float,
-    config: Dict[str, Any],
-    contributed_models: List[str]
+    seg: np.ndarray, p_ensemble: np.ndarray, vox_vol_cc: float, config: Dict[str, Any], contributed_models: List[str]
 ) -> Dict[str, Any]:
     """
     Performs clinical sanity checks on the final segmentation.
-    Checks for: 
+    Checks for:
       1. Core/Whole-Tumor ratio (Adaptive re-segmentation recovery).
       2. Isolated edema islands.
       3. Uncertainty/Entropy in tumor center.
@@ -26,7 +23,7 @@ def validate_clinical_consistency(
     entropy_warn_thresh = clinical_cfg.get("entropy_warn", 0.7)
 
     wt_mask = (seg > 0).astype(np.float32)
-    tc_mask = ((seg == 1) | (seg == 3)).astype(np.float32)
+    tc_mask = ((seg == 1) | (seg == 4)).astype(np.float32)  # BraTS 2021: ET = label 4
     ed_mask = (seg == 2).astype(np.float32)
 
     v_wt = float(wt_mask.sum()) * vox_vol_cc
@@ -51,9 +48,9 @@ def validate_clinical_consistency(
     if v_wt > 5.0 and (v_tc / v_wt) < wt_tc_min_ratio:
         results["core_empty_warning"] = True
         results["requires_manual_review"] = True
-        
+
         # Adaptive recovery: relax thresholds
-        # Note: This usually involves re-running thresholding logic, 
+        # Note: This usually involves re-running thresholding logic,
         # which might be better placed in a higher-level orchestrator.
         # For now, we flag it.
         results["status"] = "WARNING: CORE EMPTY"
@@ -72,8 +69,8 @@ def validate_clinical_consistency(
     p_safe = np.clip(p_ensemble, 1e-8, 1.0 - 1e-8)
     # H(p) = -[p*log(p) + (1-p)*log(1-p)]
     ent_per_chan = -(p_safe * np.log(p_safe) + (1.0 - p_safe) * np.log(1.0 - p_safe))
-    ent_map = np.mean(ent_per_chan, axis=0) # Average across TC, WT, ET
-    
+    ent_map = np.mean(ent_per_chan, axis=0)  # Average across TC, WT, ET
+
     if wt_mask.sum() > 0:
         avg_ent = float(ent_map[wt_mask.astype(bool)].mean()) / np.log(2.0)
         results["centre_entropy"] = round(avg_ent, 3)

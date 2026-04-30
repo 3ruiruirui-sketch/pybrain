@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import requests
 from pathlib import Path
 from tqdm import tqdm
@@ -14,17 +13,18 @@ base_path.mkdir(parents=True, exist_ok=True)
 files = {
     "T2.nii.gz": "https://github.com/akhanss/BraTS-2020/raw/master/data/brats20/TrainingData/BraTS20_Training_001/BraTS20_Training_001_t2.nii.gz",
     "FLAIR.nii.gz": "https://github.com/akhanss/BraTS-2020/raw/master/data/brats20/TrainingData/BraTS20_Training_001/BraTS20_Training_001_flair.nii.gz",
-    "GT_SEG.nii.gz": "https://github.com/akhanss/BraTS-2020/raw/master/data/brats20/TrainingData/BraTS20_Training_001/BraTS20_Training_001_seg.nii.gz"
+    "GT_SEG.nii.gz": "https://github.com/akhanss/BraTS-2020/raw/master/data/brats20/TrainingData/BraTS20_Training_001/BraTS20_Training_001_seg.nii.gz",
 }
+
 
 def download_file(url, target_path):
     """Download a file with a progress bar."""
     response = requests.get(url, stream=True)
     if response.status_code == 200:
-        total_size = int(response.headers.get('content-length', 0))
-        block_size = 1024 # 1 Kibibyte
-        t = tqdm(total=total_size, unit='iB', unit_scale=True, desc=target_path.name)
-        with open(target_path, 'wb') as f:
+        total_size = int(response.headers.get("content-length", 0))
+        block_size = 1024  # 1 Kibibyte
+        t = tqdm(total=total_size, unit="iB", unit_scale=True, desc=target_path.name)
+        with open(target_path, "wb") as f:
             for data in response.iter_content(block_size):
                 t.update(len(data))
                 f.write(data)
@@ -34,6 +34,7 @@ def download_file(url, target_path):
         print(f"  ❌ Erro ao descarregar {target_path.name}: {response.status_code}")
         return False
 
+
 def download_sample():
     print(f"\n📂 Preparando dados em: {base_path.resolve()}\n")
     for name, url in files.items():
@@ -41,7 +42,7 @@ def download_sample():
         if dest.exists():
             print(f"  ✅ {name} já existe. Ignorando.")
             continue
-            
+
         print(f"📥 A descarregar {name}...")
         try:
             success = download_file(url, dest)
@@ -49,10 +50,11 @@ def download_sample():
                 print(f"  ✅ Download concluído: {name}")
         except Exception as e:
             print(f"  ❌ Falha no download de {name}: {e}")
-            
+
     print("\n✅ Processo de download finalizado.")
     print("ℹ️  Nota: Se os downloads falharem (404), os links podem ter mudado.")
     print("   Nesse caso, podes colocar manualmente ficheiros .nii.gz na pasta acima.")
+
 
 if __name__ == "__main__":
     download_sample()

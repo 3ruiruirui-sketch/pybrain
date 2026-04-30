@@ -28,9 +28,7 @@ not in the regular Python interpreter.
 Run:  python3 scripts/11_mricrogl_visualisation.py
 """
 
-import os
 import sys
-import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,13 +38,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 from scripts.session_loader import get_session, get_paths  # type: ignore
 
-sess    = get_session()
-paths   = get_paths(sess)
-MONAI   = paths["monai_dir"]
-EXTRA   = paths["extra_dir"]
-OUT     = paths["output_dir"]
+sess = get_session()
+paths = get_paths(sess)
+MONAI = paths["monai_dir"]
+EXTRA = paths["extra_dir"]
+OUT = paths["output_dir"]
 PATIENT = sess.get("patient", {})
-PNAME   = PATIENT.get("name", "Patient").replace(" ", "_")[:20]
+PNAME = PATIENT.get("name", "Patient").replace(" ", "_")[:20]
 
 
 def banner(t):
@@ -60,16 +58,13 @@ def banner(t):
 # ═════════════════════════════════════════════════════════════════════════
 banner("STEP 1 — FINDING MRIcroGL")
 
-MRICROGL_APP  = Path("/Applications/MRIcroGL.app")
-MRICROGL_BIN  = MRICROGL_APP / "Contents" / "MacOS" / "MRIcroGL"
-MRICROGL_ALT  = Path.home() / "Applications" / "MRIcroGL.app" / \
-                "Contents" / "MacOS" / "MRIcroGL"
+MRICROGL_APP = Path("/Applications/MRIcroGL.app")
+MRICROGL_BIN = MRICROGL_APP / "Contents" / "MacOS" / "MRIcroGL"
+MRICROGL_ALT = Path.home() / "Applications" / "MRIcroGL.app" / "Contents" / "MacOS" / "MRIcroGL"
 
 # Check common locations
 mricrogl_exe = None
-for candidate in [MRICROGL_BIN, MRICROGL_ALT,
-                  Path("/usr/local/bin/mricrogl"),
-                  Path("/opt/homebrew/bin/mricrogl")]:
+for candidate in [MRICROGL_BIN, MRICROGL_ALT, Path("/usr/local/bin/mricrogl"), Path("/opt/homebrew/bin/mricrogl")]:
     if candidate.exists():
         mricrogl_exe = candidate
         break
@@ -83,7 +78,8 @@ if mricrogl_exe:
     print(f"  ✅ MRIcroGL found: {mricrogl_exe}")
 else:
     print("  ⚠️  MRIcroGL not found.")
-    print("""
+    print(
+        """
   Install MRIcroGL for Mac (Apple Silicon):
   ─────────────────────────────────────────
   Option A — Download directly (recommended):
@@ -98,26 +94,27 @@ else:
   Option C — Run manually (without this script):
     Open MRIcroGL → drag your NIfTI files from Finder
     Files are in: {out}
-""".format(out=OUT))
+""".format(out=OUT)
+    )
 
     # Create a drag-and-drop instructions file
     instructions = OUT / "MRICROGL_INSTRUCTIONS.txt"
-    t1c_path     = MONAI / "t1c_resampled.nii.gz"
-    seg_path     = OUT   / "segmentation_full.nii.gz"
-    ct_path      = EXTRA / "ct_brain_resampled.nii.gz"
+    t1c_path = MONAI / "t1c_resampled.nii.gz"
+    seg_path = OUT / "segmentation_full.nii.gz"
+    ct_path = EXTRA / "ct_brain_resampled.nii.gz"
 
     with open(instructions, "w") as f:
-        f.write(f"MRIcroGL Manual Loading Instructions\n")
-        f.write(f"Patient: {PATIENT.get('name','?')}\n")
-        f.write("="*50 + "\n\n")
+        f.write("MRIcroGL Manual Loading Instructions\n")
+        f.write(f"Patient: {PATIENT.get('name', '?')}\n")
+        f.write("=" * 50 + "\n\n")
         f.write("1. Open MRIcroGL\n\n")
         f.write("2. Drag these files into MRIcroGL (in order):\n\n")
-        f.write(f"   BACKGROUND (main volume):\n")
+        f.write("   BACKGROUND (main volume):\n")
         f.write(f"   {t1c_path}\n\n")
-        f.write(f"   OVERLAY 1 (tumour segmentation):\n")
+        f.write("   OVERLAY 1 (tumour segmentation):\n")
         f.write(f"   {seg_path}\n\n")
         if ct_path.exists():
-            f.write(f"   OVERLAY 2 (CT — registered to MRI):\n")
+            f.write("   OVERLAY 2 (CT — registered to MRI):\n")
             f.write(f"   {ct_path}\n\n")
         f.write("3. View → Rendering (or press R)\n")
         f.write("   → You will see 3D volume rendering\n\n")
@@ -144,34 +141,43 @@ else:
 # ═════════════════════════════════════════════════════════════════════════
 banner("STEP 2 — COLLECTING NIfTI FILES")
 
+
 def find_file(*candidates):
     for c in candidates:
         if Path(c).exists():
             return Path(c)
     return None
 
-t1c  = find_file(MONAI/"t1c_resampled.nii.gz", MONAI/"t1c.nii.gz")
-t1   = find_file(MONAI/"t1_resampled.nii.gz", MONAI/"t1.nii.gz")
-t2   = find_file(MONAI/"t2_resampled.nii.gz",  MONAI/"t2.nii.gz")
-flair= find_file(MONAI/"flair_resampled.nii.gz", MONAI/"flair.nii.gz")
+
+t1c = find_file(MONAI / "t1c_resampled.nii.gz", MONAI / "t1c.nii.gz")
+t1 = find_file(MONAI / "t1_resampled.nii.gz", MONAI / "t1.nii.gz")
+t2 = find_file(MONAI / "t2_resampled.nii.gz", MONAI / "t2.nii.gz")
+flair = find_file(MONAI / "flair_resampled.nii.gz", MONAI / "flair.nii.gz")
 # Standardized segmentation source for cross-stage fallback
 # Ensure we prioritize the current session output
 SEG_DIR = Path(str(paths.get("seg_dir", OUT)))
 
-seg  = find_file(SEG_DIR/"segmentation_full.nii.gz",
-                 SEG_DIR/"segmentation_ensemble.nii.gz",
-                 SEG_DIR/"segmentation_ct_merged.nii.gz")
-ct   = find_file(EXTRA/"ct_brain_resampled.nii.gz",
-                 EXTRA/"ct_brain.nii.gz",
-                 EXTRA/"ct_brain_registered.nii.gz")
-calc = find_file(EXTRA/"ct_calcification.nii.gz")
-prob = find_file(SEG_DIR/"ensemble_probability.nii.gz",
-                 SEG_DIR/"prob_wt.nii.gz",
-                 SEG_DIR/"tumor_probability.nii.gz")
+seg = find_file(
+    SEG_DIR / "segmentation_full.nii.gz",
+    SEG_DIR / "segmentation_ensemble.nii.gz",
+    SEG_DIR / "segmentation_ct_merged.nii.gz",
+)
+ct = find_file(EXTRA / "ct_brain_resampled.nii.gz", EXTRA / "ct_brain.nii.gz", EXTRA / "ct_brain_registered.nii.gz")
+calc = find_file(EXTRA / "ct_calcification.nii.gz")
+prob = find_file(
+    SEG_DIR / "ensemble_probability.nii.gz", SEG_DIR / "prob_wt.nii.gz", SEG_DIR / "tumor_probability.nii.gz"
+)
 
-for name, path in [("T1c",t1c),("T1",t1),("T2",t2),("FLAIR",flair),
-                   ("Segmentation",seg),("CT",ct),("Calcification",calc),
-                   ("Probability",prob)]:
+for name, path in [
+    ("T1c", t1c),
+    ("T1", t1),
+    ("T2", t2),
+    ("FLAIR", flair),
+    ("Segmentation", seg),
+    ("CT", ct),
+    ("Calcification", calc),
+    ("Probability", prob),
+]:
     status = f"✅ {path}" if path else "⚠️  not found"
     print(f"  {name:15s}: {status}")
 
@@ -179,7 +185,7 @@ if t1c is None and t1 is None:
     print("❌  No MRI volumes found — run Stage 1 first")
     sys.exit(1)
 
-bg_vol = t1c or t1   # use T1c as background if available
+bg_vol = t1c or t1  # use T1c as background if available
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -191,6 +197,7 @@ SCRIPT_DIR = OUT / "mricrogl_scripts"
 RENDER_DIR = OUT / "mricrogl_renders"
 SCRIPT_DIR.mkdir(exist_ok=True)
 RENDER_DIR.mkdir(exist_ok=True)
+
 
 def p(path):
     """Return path as forward-slash string for MRIcroGL."""
@@ -204,7 +211,7 @@ with open(script1, "w") as f:
 import time
 
 # PY-BRAIN — Tumour Volume Rendering
-# Patient: {PATIENT.get("name","?")}
+# Patient: {PATIENT.get("name", "?")}
 # Auto-generated by 11_mricrogl_visualisation.py
 
 gl.resetdefaults()
@@ -423,17 +430,15 @@ print("CT-MRI fusion renders saved")
 # ── Script 6: All 4 modalities mosaic ────────────────────────────────────
 script6 = SCRIPT_DIR / "render_all_modalities.py"
 with open(script6, "w") as f:
-    modality_paths = [(n, p(v)) for n, v in
-                      [("T1c",t1c),("T1",t1),("T2",t2),("FLAIR",flair)]
-                      if v is not None]
-    f.write(f'''import gl
+    modality_paths = [(n, p(v)) for n, v in [("T1c", t1c), ("T1", t1), ("T2", t2), ("FLAIR", flair)] if v is not None]
+    f.write("""import gl
 
 # All 4 MRI modalities — axial mosaic comparison
 gl.resetdefaults()
 gl.windowposition(0, 0, 1400, 400)
 gl.toolformvisible(0)
 
-''')
+""")
     for i, (mod_name, mod_path) in enumerate(modality_paths):
         f.write(f'''# {mod_name}
 gl.loadimage("{mod_path}")
@@ -441,7 +446,7 @@ gl.mosaic("A L 1 8")
 gl.savebmp("{p(RENDER_DIR)}/{PNAME}_mosaic_{mod_name}.png")
 
 ''')
-    f.write(f'print("All modality mosaics saved")\n')
+    f.write('print("All modality mosaics saved")\n')
 
 # ── Master script — runs all the above ───────────────────────────────────
 script_master = SCRIPT_DIR / "render_all.py"
@@ -451,7 +456,7 @@ import os
 
 # PY-BRAIN — Master render script
 # Runs all visualisation scripts in sequence
-# Patient: {PATIENT.get("name","?")}
+# Patient: {PATIENT.get("name", "?")}
 
 scripts = [
     "{p(script1)}",
@@ -494,6 +499,7 @@ print(f"  Script     : {script_master}")
 print(f"  Output dir : {RENDER_DIR}")
 print()
 
+
 # On macOS, MRIcroGL.app needs special launch method
 def launch_mricrogl(script_path: Path):
     """Launch MRIcroGL with a Python script on macOS."""
@@ -505,8 +511,7 @@ def launch_mricrogl(script_path: Path):
 
     print(f"  Running: {' '.join(cmd)}\n")
     try:
-        result = subprocess.run(cmd, timeout=300,
-                                capture_output=True, text=True)
+        result = subprocess.run(cmd, timeout=300, capture_output=True, text=True)
         if result.returncode == 0:
             print("  ✅ MRIcroGL completed successfully")
             return True
@@ -514,7 +519,7 @@ def launch_mricrogl(script_path: Path):
             print(f"  ⚠️  MRIcroGL exit code: {result.returncode}")
             if result.stderr:
                 err_msg: str = str(result.stderr)
-                print(f"  stderr: {err_msg[:500]}") # type: ignore
+                print(f"  stderr: {err_msg[:500]}")  # type: ignore
             return False
     except subprocess.TimeoutExpired:
         print("  ⚠️  Timeout — MRIcroGL took > 5 min")
@@ -522,6 +527,7 @@ def launch_mricrogl(script_path: Path):
     except Exception as e:
         print(f"  ❌ Error: {e}")
         return False
+
 
 success = launch_mricrogl(script_master)
 

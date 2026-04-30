@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -12,6 +11,7 @@ from radiomics import featureextractor
 # 1) CRITICAL WEIGHT CHECK
 # -----------------------------
 WEIGHTS_PATH = Path("./models/BrainIAC/weights/idh_weights.pth")
+
 
 def resolve_idh_weights_path(download_fn=None):
     """
@@ -35,6 +35,7 @@ def resolve_idh_weights_path(download_fn=None):
 
     return WEIGHTS_PATH
 
+
 # Optional example hook; replace with your own authenticated logic if desired.
 def optional_download_flow(target_path: Path):
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,20 +49,8 @@ def optional_download_flow(target_path: Path):
 # 2) PYRADIOMICS CONFIG
 # -----------------------------
 RADIOMICS_PARAMS = {
-    "imageType": {
-        "Original": {},
-        "LoG": {"sigma": [1.0, 2.0, 3.0]},
-        "Wavelet": {}
-    },
-    "featureClass": {
-        "firstorder": [],
-        "shape": [],
-        "glcm": [],
-        "glrlm": [],
-        "glszm": [],
-        "gldm": [],
-        "ngtdm": []
-    },
+    "imageType": {"Original": {}, "LoG": {"sigma": [1.0, 2.0, 3.0]}, "Wavelet": {}},
+    "featureClass": {"firstorder": [], "shape": [], "glcm": [], "glrlm": [], "glszm": [], "gldm": [], "ngtdm": []},
     "setting": {
         "label": 1,
         "normalize": True,
@@ -73,8 +62,8 @@ RADIOMICS_PARAMS = {
         "minimumROISize": 50,
         "binWidth": 25,
         "preCrop": True,
-        "padDistance": 5
-    }
+        "padDistance": 5,
+    },
 }
 
 radiomics_extractor = featureextractor.RadiomicsFeatureExtractor(**RADIOMICS_PARAMS)
@@ -82,10 +71,7 @@ radiomics_extractor = featureextractor.RadiomicsFeatureExtractor(**RADIOMICS_PAR
 
 def extract_radiomics_vector(image_path, mask_path):
     result = radiomics_extractor.execute(str(image_path), str(mask_path))
-    features = {
-        k: float(v) for k, v in result.items()
-        if not k.startswith("diagnostics_")
-    }
+    features = {k: float(v) for k, v in result.items() if not k.startswith("diagnostics_")}
     return features
 
 
@@ -114,6 +100,7 @@ class BrainIACBackbone(nn.Module):
       - load checkpoint from idh_weights.pth
       - expose an embedding vector before the final classifier
     """
+
     def __init__(self, embedding_dim=512, freeze_backbone=True):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -129,7 +116,7 @@ class BrainIACBackbone(nn.Module):
             nn.Conv3d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm3d(64),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool3d(1)
+            nn.AdaptiveAvgPool3d(1),
         )
         self.proj = nn.Linear(64, embedding_dim)
 
@@ -163,14 +150,13 @@ class GBMFusionDataset(Dataset):
     radiomics_cache_csv:
       optional path to save/load precomputed radiomics
     """
+
     def __init__(self, dataframe, radiomics_cache_csv=None):
         self.df = dataframe.reset_index(drop=True)
         self.radiomics_cache_csv = radiomics_cache_csv
         self.radiomics_df = self._prepare_radiomics()
 
-        self.feature_cols = [
-            c for c in self.radiomics_df.columns if c != "patient_id"
-        ]
+        self.feature_cols = [c for c in self.radiomics_df.columns if c != "patient_id"]
 
     def _prepare_radiomics(self):
         if self.radiomics_cache_csv and Path(self.radiomics_cache_csv).exists():
@@ -207,7 +193,7 @@ class GBMFusionDataset(Dataset):
             "image": image,
             "radiomics": torch.tensor(rad, dtype=torch.float32),
             "target": torch.tensor(target, dtype=torch.float32),
-            "patient_id": row["patient_id"]
+            "patient_id": row["patient_id"],
         }
 
 
@@ -217,10 +203,7 @@ class GBMFusionDataset(Dataset):
 class BrainIACRadiomicsFusion(nn.Module):
     def __init__(self, radiomics_dim, embedding_dim=512, hidden_dim=256, freeze_backbone=True):
         super().__init__()
-        self.brainiac = BrainIACBackbone(
-            embedding_dim=embedding_dim,
-            freeze_backbone=freeze_backbone
-        )
+        self.brainiac = BrainIACBackbone(embedding_dim=embedding_dim, freeze_backbone=freeze_backbone)
 
         self.rad_norm = nn.BatchNorm1d(radiomics_dim)
 
@@ -228,7 +211,7 @@ class BrainIACRadiomicsFusion(nn.Module):
             nn.Linear(embedding_dim + radiomics_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(0.3),
-            nn.Linear(hidden_dim, 1)
+            nn.Linear(hidden_dim, 1),
         )
 
     def load_weights(self, checkpoint_path):
@@ -313,19 +296,12 @@ def main():
 
     radiomics_dim = len(train_ds.feature_cols)
     model = BrainIACRadiomicsFusion(
-        radiomics_dim=radiomics_dim,
-        embedding_dim=512,
-        hidden_dim=256,
-        freeze_backbone=True
+        radiomics_dim=radiomics_dim, embedding_dim=512, hidden_dim=256, freeze_backbone=True
     ).to(device)
 
     model.load_weights(checkpoint_path)
 
-    optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=1e-4,
-        weight_decay=1e-4
-    )
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-4)
 
     for epoch in range(1, 11):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)

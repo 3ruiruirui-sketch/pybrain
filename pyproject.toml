@@ -47,7 +47,6 @@ dependencies = [
     "pynrrd",
     "scikit-image",
     "scipy",
-    "pyradiomics",
     "scikit-learn",
     "pandas",
     "numpy<2.0.0",
@@ -61,6 +60,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+radiomics = [
+    "pyradiomics",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

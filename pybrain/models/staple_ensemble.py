@@ -4,7 +4,7 @@ Data-driven ensemble weighting for brain tumor segmentation.
 """
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Tuple, Optional
 from pybrain.io.logging_utils import get_logger
 
 logger = get_logger("models.staple")
@@ -16,23 +16,21 @@ class STAPLEEnsemble:
     Estimates sensitivity and specificity of each rater and computes
     probabilistic fusion of segmentations.
     """
-    
+
     def __init__(self, max_iter: int = 100, tolerance: float = 1e-6):
         self.max_iter = max_iter
         self.tolerance = tolerance
-        
+
     def _compute_performance_parameters(
-        self, 
-        segmentations: np.ndarray,
-        truth_prob: np.ndarray
+        self, segmentations: np.ndarray, truth_prob: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Compute sensitivity and specificity for each rater.
-        
+
         Args:
             segmentations: Shape (n_raters, n_voxels) binary segmentations
             truth_prob: Shape (n_voxels,) current estimate of truth probability
-            
+
         Returns:
             sensitivities: Shape (n_raters,) sensitivity for each rater
             specificities: Shape (n_raters,) specificity for each rater
@@ -40,31 +38,28 @@ class STAPLEEnsemble:
         n_raters = segmentations.shape[0]
         sensitivities = np.zeros(n_raters)
         specificities = np.zeros(n_raters)
-        
+
         for i in range(n_raters):
             seg_i = segmentations[i]
-            
+
             # Sensitivity: P(seg=1|truth=1)
             truth_mask = truth_prob > 0.5
             if truth_mask.sum() > 0:
                 sensitivities[i] = (seg_i[truth_mask]).sum() / truth_mask.sum()
-            
+
             # Specificity: P(seg=0|truth=0)
             non_truth_mask = ~truth_mask
             if non_truth_mask.sum() > 0:
                 specificities[i] = (1 - seg_i[non_truth_mask]).sum() / non_truth_mask.sum()
-                
+
         # Clip to valid range
         sensitivities = np.clip(sensitivities, 0.01, 0.99)
         specificities = np.clip(specificities, 0.01, 0.99)
-        
+
         return sensitivities, specificities
-    
+
     def _compute_truth_probability(
-        self,
-        segmentations: np.ndarray,
-        sensitivities: np.ndarray,
-        specificities: np.ndarray
+        self, segmentations: np.ndarray, sensitivities: np.ndarray, specificities: np.ndarray
     ) -> np.ndarray:
         """
         Compute truth probability given rater performance parameters.
@@ -85,72 +80,66 @@ class STAPLEEnsemble:
         # log-odds contribution when rater says 0: log((1-p_i) / q_i)
         # where p_i = sensitivity, q_i = specificity
         eps = 1e-8
-        log_when_1 = np.log(sensitivities / (1.0 - specificities + eps) + eps)   # (n_raters,)
+        log_when_1 = np.log(sensitivities / (1.0 - specificities + eps) + eps)  # (n_raters,)
         log_when_0 = np.log((1.0 - sensitivities + eps) / (specificities + eps))  # (n_raters,)
 
         # segmentations: (n_raters, n_voxels)  float32  {0, 1}
         # log_when_1 / log_when_0: (n_raters, 1)  broadcast over voxels
-        log_odds = (
-            segmentations       * log_when_1[:, np.newaxis] +
-            (1 - segmentations) * log_when_0[:, np.newaxis]
-        ).sum(axis=0)  # (n_voxels,)
+        log_odds = (segmentations * log_when_1[:, np.newaxis] + (1 - segmentations) * log_when_0[:, np.newaxis]).sum(
+            axis=0
+        )  # (n_voxels,)
 
         truth_prob = 1.0 / (1.0 + np.exp(-log_odds))
         return np.clip(truth_prob, 0.001, 0.999)
-    
+
     def fit(
-        self,
-        segmentations: np.ndarray,
-        initial_truth: Optional[np.ndarray] = None
+        self, segmentations: np.ndarray, initial_truth: Optional[np.ndarray] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Fit STAPLE model to segmentations.
-        
+
         Args:
             segmentations: Shape (n_raters, n_voxels) binary segmentations
             initial_truth: Optional initial truth probability estimate
-            
+
         Returns:
             truth_prob: Shape (n_voxels,) final truth probability
             sensitivities: Shape (n_raters,) sensitivity for each rater
             specificities: Shape (n_raters,) specificity for each rater
         """
         n_raters, n_voxels = segmentations.shape
-        
+
         # Initialize truth probability
         if initial_truth is not None:
             truth_prob = initial_truth.copy()
         else:
             # Simple majority vote as initialization
             truth_prob = segmentations.mean(axis=0)
-        
+
         # EM algorithm
         prev_truth = truth_prob.copy()
-        
+
         for iteration in range(self.max_iter):
             # E-step: Compute performance parameters
-            sensitivities, specificities = self._compute_performance_parameters(
-                segmentations, truth_prob
-            )
-            
+            sensitivities, specificities = self._compute_performance_parameters(segmentations, truth_prob)
+
             # M-step: Update truth probability
-            truth_prob = self._compute_truth_probability(
-                segmentations, sensitivities, specificities
-            )
-            
+            truth_prob = self._compute_truth_probability(segmentations, sensitivities, specificities)
+
             # Check convergence
             diff = np.mean(np.abs(truth_prob - prev_truth))
             if diff < self.tolerance:
                 logger.debug(f"STAPLE converged at iteration {iteration}")
                 break
-                
+
             prev_truth = truth_prob.copy()
         else:
             logger.warning(f"STAPLE did not converge after {self.max_iter} iterations")
-        
-        logger.info(f"STAPLE completed: avg sensitivity={sensitivities.mean():.3f}, "
-                   f"avg specificity={specificities.mean():.3f}")
-        
+
+        logger.info(
+            f"STAPLE completed: avg sensitivity={sensitivities.mean():.3f}, avg specificity={specificities.mean():.3f}"
+        )
+
         return truth_prob, sensitivities, specificities
 
 
@@ -207,10 +196,7 @@ def run_staple_ensemble(
     return ensemble_prob
 
 
-def validate_staple_weights(
-    model_probs: Dict[str, np.ndarray],
-    ensemble_weights: Dict[str, float]
-) -> bool:
+def validate_staple_weights(model_probs: Dict[str, np.ndarray], ensemble_weights: Dict[str, float]) -> bool:
     """
     Validate that ensemble weights are suitable for STAPLE.
 
@@ -224,11 +210,7 @@ def validate_staple_weights(
         return False
 
     # Only look at active models (present in model_probs AND have a nonzero weight)
-    active_weights = [
-        ensemble_weights.get(name, 1.0)
-        for name in model_probs
-        if ensemble_weights.get(name, 1.0) > 0
-    ]
+    active_weights = [ensemble_weights.get(name, 1.0) for name in model_probs if ensemble_weights.get(name, 1.0) > 0]
     if len(active_weights) < 2:
         logger.warning("STAPLE requires at least 2 models with non-zero weight")
         return False
