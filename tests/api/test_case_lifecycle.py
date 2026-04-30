@@ -3,7 +3,7 @@ Case lifecycle tests: upload → segment → fetch results → delete.
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from io import BytesIO
 
 
@@ -18,7 +18,7 @@ async def test_create_case():
     settings.environment = "development"
 
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Create a dummy file for upload
             file_content = BytesIO(b"test data")
             files = {"files": ("test.nii.gz", file_content, "application/octet-stream")}
@@ -69,7 +69,7 @@ async def test_get_case():
             db.add(case)
             await db.commit()
 
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 f"/cases/{case_id}",
                 headers={"Authorization": "Bearer dev-api-key-123"},
@@ -113,7 +113,7 @@ async def test_delete_case():
             db.add(case)
             await db.commit()
 
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.delete(
                 f"/cases/{case_id}",
                 headers={"Authorization": "Bearer dev-api-key-123"},
@@ -161,7 +161,7 @@ async def test_trigger_segmentation():
             db.add(case)
             await db.commit()
 
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
                 f"/cases/{case_id}/segment",
                 headers={"Authorization": "Bearer dev-api-key-123"},

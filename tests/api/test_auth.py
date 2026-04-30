@@ -3,7 +3,7 @@ Authentication tests: missing/invalid/valid JWT and API keys.
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 
 @pytest.mark.asyncio
@@ -16,7 +16,7 @@ async def test_missing_auth():
     settings.environment = "production"  # Not development mode
 
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/cases/test-case")
             assert response.status_code == 401
     finally:
@@ -35,7 +35,7 @@ async def test_invalid_api_key():
     settings.api_keys = ["valid-key-123"]
 
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 "/cases/test-case",
                 headers={"Authorization": "Bearer invalid-key"},
@@ -58,7 +58,7 @@ async def test_valid_api_key():
     settings.api_keys = ["valid-key-123"]
 
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 "/cases/test-case",
                 headers={"Authorization": "Bearer valid-key-123"},
@@ -80,7 +80,7 @@ async def test_development_mode_any_token():
     settings.environment = "development"
 
     try:
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(
                 "/cases/test-case",
                 headers={"Authorization": "Bearer any-token"},

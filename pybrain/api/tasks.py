@@ -2,8 +2,10 @@
 Celery tasks for async job processing.
 """
 
+import shutil
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
+from pathlib import Path
 from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,28 +69,92 @@ def segment_case(self, case_id: str) -> Dict[str, Any]:
             await db.commit()
 
             try:
-                # TODO: Run actual PY-BRAIN pipeline
-                # This is a placeholder - integrate with pybrain.pipeline.run()
-                # For now, simulate processing
+                # Run actual PY-BRAIN pipeline
                 logger.info(f"Segmenting case {case_id}")
 
-                # Simulate progress updates
-                for i in range(0, 101, 25):
-                    if job:
-                        job.progress = i
-                        await db.commit()
+                # Get input files from storage
+                input_files = {}
+                storage_path = case.storage_path
+                
+                # Discover input files in storage
+                # Expected structure: cases/{case_id}/{modality}.nii.gz
+                for modality in ["T1", "T1c", "T2", "FLAIR"]:
+                    file_path = f"{storage_path}/{modality.lower()}.nii.gz"
+                    try:
+                        if await storage.file_exists(file_path):
+                            # Download file to temp location
+                            temp_dir = Path(f"/tmp/pybrain_{case_id}")
+                            temp_dir.mkdir(parents=True, exist_ok=True)
+                            temp_file = temp_dir / f"{modality.lower()}.nii.gz"
+                            
+                            file_content = await storage.get_file(file_path)
+                            with open(temp_file, "wb") as f:
+                                shutil.copyfileobj(file_content, f)
+                            
+                            input_files[modality] = str(temp_file)
+                    except Exception as e:
+                        logger.warning(f"Could not find {modality} file: {e}")
+                
+                if not input_files:
+                    raise ValueError(f"No input files found for case {case_id}")
 
-                # Mock result
-                result = {
-                    "volumes": {"wt_cc": 10.5, "tc_cc": 5.2, "et_cc": 3.1, "nc_cc": 5.3},
-                    "segmentation_path": f"cases/{case_id}/segmentation.nii.gz",
-                    "report_path": f"cases/{case_id}/report.pdf",
-                }
+                # Create output directory
+                output_dir = Path(f"/tmp/pybrain_output_{case_id}")
+                output_dir.mkdir(parents=True, exist_ok=True)
 
+                # Update progress
+                if job:
+                    job.progress = 10
+                    await db.commit()
+
+                # Run PY-BRAIN pipeline
+                from pybrain.pipeline import run as run_pipeline
+                
+                analysis_mode: Literal["glioma", "mets", "auto"] = (
+                    case.analysis_mode or "auto"
+                )  # type: ignore
+                
+                result = run_pipeline(
+                    assignments=input_files,
+                    output_dir=output_dir,
+                    analysis_mode=analysis_mode,
+                    run_location=True,
+                    run_morphology=True,
+                    run_radiomics=False,  # Skip radiomics for API
+                    run_report=True,
+                    patient={
+                        "name": case.patient_name,
+                        "age": case.patient_age,
+                        "sex": case.patient_sex,
+                    } if case.patient_name else None,
+                )
+
+                # Update progress
+                if job:
+                    job.progress = 80
+                    await db.commit()
+
+                # Save results to storage
+                segmentation_path = output_dir / "segmentation_full.nii.gz"
+                report_path = output_dir / f"report_{case_id}.pdf"
+                
+                if segmentation_path.exists():
+                    seg_storage_path = f"{storage_path}/segmentation.nii.gz"
+                    with open(segmentation_path, "rb") as f:
+                        await storage.save_file(seg_storage_path, f)
+                    case.segmentation_path = seg_storage_path
+                
+                if report_path.exists():
+                    report_storage_path = f"{storage_path}/report.pdf"
+                    with open(report_path, "rb") as f:
+                        await storage.save_file(report_storage_path, f)
+                    case.report_path = report_storage_path
+
+                # Extract volumes from result
+                volumes = result.get("volumes", {})
+                
                 # Update case with results
-                case.volumes = result["volumes"]
-                case.segmentation_path = result["segmentation_path"]
-                case.report_path = result["report_path"]
+                case.volumes = volumes
                 case.status = "completed"
                 case.updated_at = datetime.utcnow()
 
@@ -97,11 +163,19 @@ def segment_case(self, case_id: str) -> Dict[str, Any]:
                     job.status = "success"
                     job.progress = 100
                     job.completed_at = datetime.utcnow()
-                    job.result = result
+                    job.result = {
+                        "volumes": volumes,
+                        "segmentation_path": case.segmentation_path,
+                        "report_path": case.report_path,
+                    }
 
                 await db.commit()
 
-                return result
+                return {
+                    "volumes": volumes,
+                    "segmentation_path": case.segmentation_path,
+                    "report_path": case.report_path,
+                }
 
             except Exception as e:
                 logger.error(f"Segmentation failed for case {case_id}: {e}")

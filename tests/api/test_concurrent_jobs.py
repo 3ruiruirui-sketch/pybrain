@@ -4,7 +4,7 @@ Concurrent jobs test: 5 parallel segmentations don't deadlock workers.
 
 import pytest
 import asyncio
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 
 
@@ -42,7 +42,7 @@ async def test_concurrent_segmentation_jobs():
             await db.commit()
 
         # Trigger 5 concurrent segmentation jobs
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             tasks = []
             for case_id in case_ids:
                 task = client.post(

@@ -3,7 +3,7 @@ Audit logging tests: every modifying action produces an audit row.
 """
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 
 
@@ -24,7 +24,7 @@ async def test_audit_log_on_case_creation():
             await conn.run_sync(Base.metadata.create_all)
 
         from io import BytesIO
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             file_content = BytesIO(b"test data")
             files = {"files": ("test.nii.gz", file_content, "application/octet-stream")}
             data = {"analysis_mode": "auto"}
@@ -80,7 +80,7 @@ async def test_audit_log_on_case_deletion():
             await db.commit()
 
         # Delete the case
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.delete(
                 f"/cases/{case_id}",
                 headers={"Authorization": "Bearer dev-api-key-123"},
@@ -132,7 +132,7 @@ async def test_audit_log_on_case_access():
             await db.commit()
 
         # Access the case
-        async with AsyncClient(app=app, base_url="http://test") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.get(
                 f"/cases/{case_id}",
                 headers={"Authorization": "Bearer dev-api-key-123"},
