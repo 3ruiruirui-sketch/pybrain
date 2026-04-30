@@ -1,4 +1,0 @@
-# This file has been removed to resolve divergence.
-# Use pybrain/config/defaults.yaml as the canonical configuration source.
-# The outer config/defaults.yaml was outdated and conflicted with the inner
-# pybrain/config/defaults.yaml which is actually loaded by the pipeline.

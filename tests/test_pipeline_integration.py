@@ -233,11 +233,11 @@ class TestConfigConsistency:
     """Tests for config file consistency (adapted from BrainLesion/BraTS S1/S2)."""
 
     def test_defaults_yaml_exists(self):
-        cfg_path = Path(__file__).resolve().parent.parent / "config" / "defaults.yaml"
+        cfg_path = Path(__file__).resolve().parent.parent / "pybrain" / "config" / "defaults.yaml"
         assert cfg_path.exists(), f"defaults.yaml not found at {cfg_path}"
 
     def test_thresholds_in_range(self):
-        cfg_path = Path(__file__).resolve().parent.parent / "config" / "defaults.yaml"
+        cfg_path = Path(__file__).resolve().parent.parent / "pybrain" / "config" / "defaults.yaml"
         if not cfg_path.exists():
             pytest.skip("defaults.yaml not found")
 
@@ -249,7 +249,7 @@ class TestConfigConsistency:
             assert 0.0 < val < 1.0, f"threshold {name}={val} outside (0,1)"
 
     def test_ensemble_weights_sum(self):
-        cfg_path = Path(__file__).resolve().parent.parent / "config" / "defaults.yaml"
+        cfg_path = Path(__file__).resolve().parent.parent / "pybrain" / "config" / "defaults.yaml"
         if not cfg_path.exists():
             pytest.skip("defaults.yaml not found")
 
@@ -264,7 +264,7 @@ class TestConfigConsistency:
 
     def test_preprocessing_config(self):
         """S1: Preprocessing config smoke test."""
-        cfg_path = Path(__file__).resolve().parent.parent / "config" / "defaults.yaml"
+        cfg_path = Path(__file__).resolve().parent.parent / "pybrain" / "config" / "defaults.yaml"
         if not cfg_path.exists():
             pytest.skip("defaults.yaml not found")
 
