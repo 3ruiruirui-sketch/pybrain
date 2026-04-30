@@ -7,6 +7,14 @@ from typing import List, Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Async database drivers - at module scope to avoid Pydantic v2 ModelPrivateAttr
+_ASYNC_DRIVERS = (
+    "postgresql+asyncpg://",
+    "sqlite+aiosqlite://",
+    "mysql+aiomysql://",
+    "mysql+asyncmy://",
+)
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -16,14 +24,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
-    )
-
-    # Async database drivers
-    _ASYNC_DRIVERS = (
-        "postgresql+asyncpg://",
-        "sqlite+aiosqlite://",
-        "mysql+aiomysql://",
-        "mysql+asyncmy://",
     )
 
     # Application
@@ -151,9 +151,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_database_url(cls, v: str) -> str:
         """Ensure database URL uses an async driver."""
-        if not any(v.startswith(d) for d in cls._ASYNC_DRIVERS):
+        if not any(v.startswith(d) for d in _ASYNC_DRIVERS):
             raise ValueError(
-                f"DATABASE_URL must use one of: {', '.join(cls._ASYNC_DRIVERS)}"
+                f"DATABASE_URL must use one of: {', '.join(_ASYNC_DRIVERS)}"
             )
         return v
 
