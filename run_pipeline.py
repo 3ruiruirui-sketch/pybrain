@@ -159,20 +159,23 @@ def _guess_type(name):
     ):
         return "IGNORE"
     # T1c BEFORE T1 (civ = contrast IV)
-    # Use regex patterns with negative lookahead to match 'post' but not 'posterior'
+    # Use positive list of exact post-contrast indicators to avoid matching non-clinical post_* tokens
     t1c_patterns = [
         r"\bciv\b",
         r"_civ\b",
         r"\bcontrast\b",
         r"\bgad\b",
-        r"\bpost(?!erior)",  # post but not posterior
-        r"postcontrast",
-        r"post_gad",
-        r"post_contrast",
+        r"_?postcontrast\b",  # postcontrast or _postcontrast
+        r"_?post_contrast\b",  # post_contrast or _post_contrast
+        r"_?post_gad\b",  # post_gad or _post_gad
+        r"_?postgad\b",  # postgad or _postgad
+        r"\bt1_post\b",      # t1_post (not t1_postOTHER)
+        r"\bt1_post_",       # t1_post_<modifier>
+        r"\bax_t1_post\b",
         r"\bt1c\b",
-        r"t1c_",  # t1c_mprage, t1c_3d, etc.
+        r"t1c_",
         r"\bt1ce\b",
-        r"t1ce_",  # t1ce_mprage, etc.
+        r"t1ce_",
         r"t1\+",
         r"\+c\b",
         r"\bt1_ce\b",
