@@ -75,14 +75,6 @@
 
 ## Disabled Models
 
-#### nnU-Net (DynUNet) — DISABLED
-
-| Property | Value |
-|---------|-------|
-| Reason | No validated pretrained weights available |
-| Status | **Permanently disabled** — do not enable without pretrained weights |
-| Future | Awaiting official MONAI nnU-Net bundle release |
-
 #### SwinUNETR — DISABLED
 
 | Property | Value |
@@ -147,6 +139,52 @@ Full validation details: [docs/technical/VALIDATION.md](./VALIDATION.md)
 | WT boundary vs interior ratio | 1.32× | Moderately higher at boundary |
 | TC boundary vs interior ratio | 8.01× | Significantly higher at boundary |
 | Dice agreement (MC vs standard) | 0.940–0.950 | Excellent agreement |
+
+---
+
+## Brain Metastases Analysis
+
+### Mets Detection Model
+
+| Property | Value |
+|----------|-------|
+| Method | Fallback threshold (intensity-based) |
+| Alternative methods | nnDetection (preferred), 3D RetinaNet (via MONAI) |
+| Input | T1c post-contrast image |
+| Output | Lesion candidates with centroids, bboxes, volumes |
+| Min lesion volume | 0.05 cc (configurable) |
+| Confidence threshold | 0.5 (configurable) |
+| Max lesions | 50 (configurable) |
+
+### Mets Segmentation Model
+
+| Property | Value |
+|----------|-------|
+| Architecture | SegResNet (per-lesion patch segmentation) |
+| Patch size | 64³ voxels (configurable) |
+| Training data | Stanford BrainMetShare (~156 patients) |
+| Training approach | Per-patient cross-validation (to avoid leakage) |
+| Output | Binary segmentation per lesion |
+
+### Mets Metrics (Target)
+
+| Metric | Target | Status |
+|--------|--------|--------|
+| Detection sensitivity | ≥ 0.85 (lesions > 0.1 cc) | Pending validation |
+| Detection false positives/scan | ≤ 2 | Pending validation |
+| Per-lesion Dice (segmentation) | ≥ 0.80 | Pending validation |
+| Volume error per lesion | ≤ 10% | Validated on synthetic phantoms |
+| Auto mode classification accuracy | ≥ 0.90 | Validated on synthetic phantoms |
+
+### Mets vs Glioma Auto-Classification
+
+| Heuristic | Threshold |
+|-----------|-----------|
+| Multiple lesions → mets | ≥ 3 significant lesions |
+| Single large lesion → glioma | 1 lesion > 50 cc |
+| Uncertain → manual review | 2 lesions or intermediate size |
+
+> **Note**: Mets analysis is currently in research development stage. Metrics are target values pending validation on clinical data. Use synthetic phantoms for testing (see `tests/test_mets.py`).
 
 ---
 

@@ -1,0 +1,56 @@
+{
+  "AuthenticationEnabled": false,
+  "DicomAET": "ORTHANC",
+  "DicomPort": 4242,
+  "DicomModalities": {
+    "PYBRAIN": ["EchoSCP", "StoreSCP", "FindSCP", "MoveSCP"]
+  },
+  "RemoteAccessAllowed": true,
+  "HttpPort": 8042,
+  "HttpCompressionEnabled": true,
+  "OrthancPeers": {
+    "PYBRAIN": {
+      "AET": "PYBRAIN",
+      "Host": "host.docker.internal",
+      "Port": 11112
+    }
+  },
+  "DicomAssociationCloseDelay": 5,
+  "DicomCheckModalitiesInFind": false,
+  "DicomCheckModalitiesInMove": false,
+  "DicomCheckModalitiesInStore": false,
+  "DicomScpTimeout": 60,
+  "DicomScuTimeout": 60,
+  "DicomAlwaysAllowFind": true,
+  "DicomAlwaysAllowMove": true,
+  "DicomAlwaysAllowStore": true,
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "IndexDirectory": "/var/lib/orthanc/db/index",
+  "MaximumPatientCount": 0,
+  "MaximumStudyCount": 0,
+  "MaximumStorageSize": 0,
+  "UnknownSopClassAccepted": true,
+  "LogExportedResources": true,
+  "LogExportedResourcesForJobs": true,
+  "LogJobs": true,
+  "LogFindResults": true,
+  "LogMoveResults": true,
+  "LogStoreInstances": true,
+  "DatabaseServerIdentifier": "PyBrainOrthanc",
+  "DatabaseServerName": "PyBrain Orthanc",
+  "PostgreSQL": {
+    "EnableIndex": true,
+    "EnableStorage": true,
+    "Host": "postgres",
+    "Port": 5432,
+    "Database": "orthancdb",
+    "Username": "orthanc",
+    "Password": "orthanc",
+    "IndexConnectionsCount": 10,
+    "StorageConnectionsCount": 10,
+    "Lock": false
+  },
+  "PluginsEnabled": [
+    "connectivity-check"
+  ]
+}

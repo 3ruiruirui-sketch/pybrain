@@ -20,7 +20,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 import nibabel as nib
 import numpy as np
@@ -73,6 +73,11 @@ def run(
     run_report: bool = True,
     patient: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, Any]] = None,
+    export_dicom_seg: bool = False,
+    source_dicom_dir: Optional[Path] = None,
+    export_dicom_sr: bool = False,
+    prior_session_dir: Optional[Path] = None,
+    analysis_mode: Literal["glioma", "mets", "auto"] = "glioma",
 ) -> Dict[str, Any]:
     """
     Execute the full PY-BRAIN pipeline.
@@ -93,11 +98,23 @@ def run(
         Patient metadata (name, age, sex).
     config : dict, optional
         Pipeline configuration (from ``load_config``).
+    export_dicom_seg : bool
+        If True, export segmentation as DICOM-SEG file.
+    source_dicom_dir : Path, optional
+        Source DICOM directory for DICOM-SEG export (required if export_dicom_seg=True).
+    export_dicom_sr : bool
+        If True, export measurements as DICOM-SR file.
+    prior_session_dir : Path, optional
+        Prior session directory for longitudinal comparison (contains T1c and segmentation).
+    analysis_mode : str
+        Analysis mode: "glioma" for single large tumor, "mets" for multiple small lesions,
+        or "auto" to automatically classify based on lesion count.
 
     Returns
     -------
     dict
-        Summary with paths to all outputs.
+        Summary with paths to all outputs. Includes either "glioma_result" or "mets_result"
+        depending on analysis_mode.
     """
     t_start = time.time()
     config = config or load_config()
@@ -156,8 +173,77 @@ def run(
             ref_nifti_path=t1_path if t1_path.exists() else None,
         )
 
+    # Add spacing to config for mets analysis
+    zooms = ref_img.header.get_zooms()[:3]
+    config["spacing"] = zooms
+
+    # ── Analysis Mode Selection ─────────────────────────────────────────────
+    if analysis_mode == "auto":
+        logger.info("Auto-detecting analysis mode...")
+        from pybrain.analysis.mets_pipeline import classify_analysis_mode
+
+        determined_mode = classify_analysis_mode(
+            volumes["T1C"],
+            brain_mask,
+            config,
+        )
+        logger.info(f"Auto-detected mode: {determined_mode}")
+        analysis_mode = determined_mode
+
     # ── Segmentation ──────────────────────────────────────────────────────
-    logger.info("Running segmentation...")
+    if analysis_mode == "mets":
+        logger.info("Running mets analysis pipeline...")
+        from pybrain.analysis.mets_pipeline import run_mets_analysis, generate_mets_report
+
+        # Check if mets is enabled in config
+        mets_config = config.get("mets", {})
+        if not mets_config.get("enabled", False):
+            logger.warning("Mets analysis requested but not enabled in config. Falling back to glioma.")
+            analysis_mode = "glioma"
+        else:
+            # Run mets analysis
+            mets_result = run_mets_analysis(
+                t1c=volumes["T1C"],
+                t1=volumes["T1"],
+                t2=volumes["T2"],
+                flair=volumes["FLAIR"],
+                brain_mask=brain_mask,
+                config=config,
+                device=config.get("hardware", {}).get("device", "cpu"),
+            )
+
+            # Save mets segmentation
+            mets_seg_path = output_dir / "segmentation_full.nii.gz"
+            from pybrain.io.nifti_io import save_nifti
+            save_nifti(mets_result.combined_segmentation, mets_seg_path, ref_img)
+
+            # Save mets report
+            mets_report = generate_mets_report(mets_result)
+            mets_report_path = output_dir / "mets_report.json"
+            with open(mets_report_path, "w") as f:
+                json.dump(mets_report, f, indent=2)
+
+            result["mets_result"] = {
+                "total_lesion_count": mets_result.total_lesion_count,
+                "total_lesion_volume_cc": mets_result.total_lesion_volume_cc,
+                "detection_method": mets_result.detection_method,
+                "segmentation_method": mets_result.segmentation_method,
+                "report_path": str(mets_report_path),
+            }
+            result["analysis_mode"] = "mets"
+            result["volumes"] = {
+                "wt_cc": mets_result.total_lesion_volume_cc,  # All lesions as WT
+                "tc_cc": 0.0,
+                "et_cc": 0.0,
+                "nc_cc": 0.0,
+            }
+
+            # Skip downstream glioma-specific analysis for mets
+            logger.info("Mets analysis complete. Skipping glioma-specific analysis.")
+            return result
+
+    # Glioma analysis (default)
+    logger.info("Running glioma segmentation...")
     from pybrain.core.segmentation import segment, SegmentationConfig
 
     seg_cfg = SegmentationConfig(
@@ -192,6 +278,34 @@ def run(
     from pybrain.io.nifti_io import save_nifti
 
     save_nifti(seg_result.seg_full, seg_path, ref_img)
+
+    # ── DICOM-SEG Export ───────────────────────────────────────────────────
+    if export_dicom_seg:
+        if source_dicom_dir is None:
+            logger.warning("export_dicom_seg=True but source_dicom_dir not provided — skipping DICOM-SEG export")
+        else:
+            try:
+                from pybrain.io.dicom_seg_writer import write_dicom_seg
+
+                dicom_seg_path = output_dir / "segmentation.dcm"
+                dicom_cfg = config.get("output", {}).get("dicom_seg", {})
+                
+                write_dicom_seg(
+                    segmentation=seg_result.seg_full,
+                    source_dicom_dir=Path(source_dicom_dir),
+                    output_path=dicom_seg_path,
+                    series_description=dicom_cfg.get(
+                        "series_description",
+                        "PY-BRAIN BraTS Segmentation (Research Only)",
+                    ),
+                    algorithm_name=dicom_cfg.get("algorithm_name", "PY-BRAIN v2"),
+                    include_disclaimer=dicom_cfg.get("include_disclaimer", True),
+                )
+                result["dicom_seg_path"] = str(dicom_seg_path)
+                logger.info(f"DICOM-SEG exported to {dicom_seg_path}")
+            except Exception as exc:
+                logger.warning(f"DICOM-SEG export failed: {exc}")
+                result["dicom_seg_path"] = None
 
     # ── Quality report ────────────────────────────────────────────────────
     quality = {
@@ -259,7 +373,6 @@ def run(
         except Exception as exc:
             logger.warning(f"Morphology analysis failed: {exc}")
 
-    # ── Radiomics ─────────────────────────────────────────────────────────
     if run_radiomics:
         try:
             from pybrain.analysis.radiomics import extract_radiomics
@@ -330,6 +443,107 @@ def run(
         logger.info(f"  MGMT: {mgmt['prediction']} ({mgmt['probability']:.0%}, {mgmt['confidence_level']})")
     except Exception as exc:
         logger.warning(f"Molecular prediction failed: {exc}")
+
+    # ── DICOM-SR Export (Final Stage) ────────────────────────────────────────
+    if export_dicom_sr:
+        if source_dicom_dir is None:
+            logger.warning("export_dicom_sr=True but source_dicom_dir not provided — skipping DICOM-SR export")
+        else:
+            try:
+                from pybrain.io.dicom_sr_writer import write_measurement_report
+
+                dicom_sr_path = output_dir / "measurements.dcm"
+                
+                # Extract measurements from result
+                measurements_dict = {}
+                if "volumes" in result:
+                    vol = result["volumes"]
+                    measurements_dict["wt_volume_cc"] = vol.get("wt_cc", 0.0)
+                    measurements_dict["tc_volume_cc"] = vol.get("tc_cc", 0.0)
+                    measurements_dict["et_volume_cc"] = vol.get("et_cc", 0.0)
+                    measurements_dict["nc_volume_cc"] = vol.get("nc_cc", 0.0)
+                
+                # Add uncertainty if available
+                if "uncertainty_mean" in result:
+                    measurements_dict["uncertainty_mean"] = result["uncertainty_mean"]
+                
+                # Write DICOM-SR (requires DICOM-SEG file)
+                dicom_seg_path = output_dir / "segmentation.dcm"
+                if not dicom_seg_path.exists():
+                    logger.warning("DICOM-SEG file not found — DICOM-SR requires DICOM-SEG reference")
+                    result["dicom_sr_path"] = None
+                else:
+                    write_measurement_report(
+                        measurements=measurements_dict,
+                        source_dicom_dir=Path(source_dicom_dir),
+                        segmentation_dicom_path=dicom_seg_path,
+                        output_path=dicom_sr_path,
+                    )
+                    result["dicom_sr_path"] = str(dicom_sr_path)
+                    logger.info(f"DICOM-SR exported to {dicom_sr_path}")
+            except Exception as exc:
+                logger.warning(f"DICOM-SR export failed: {exc}")
+                result["dicom_sr_path"] = None
+
+    # ── Longitudinal Analysis (Final Stage) ────────────────────────────────────
+    if prior_session_dir is not None:
+        try:
+            from pybrain.analysis.longitudinal import compare_timepoints
+
+            longitudinal_output_dir = output_dir / "longitudinal"
+            
+            # Find required files in current session
+            current_t1c = output_dir / "T1c.nii.gz"
+            current_seg = output_dir / "segmentation_full.nii.gz"
+            
+            # Find required files in prior session
+            prior_t1c = Path(prior_session_dir) / "T1c.nii.gz"
+            prior_seg = Path(prior_session_dir) / "segmentation_full.nii.gz"
+            
+            # Validate files exist
+            if not current_t1c.exists():
+                logger.warning("Current T1c not found — skipping longitudinal analysis")
+            elif not current_seg.exists():
+                logger.warning("Current segmentation not found — skipping longitudinal analysis")
+            elif not prior_t1c.exists():
+                logger.warning("Prior T1c not found — skipping longitudinal analysis")
+            elif not prior_seg.exists():
+                logger.warning("Prior segmentation not found — skipping longitudinal analysis")
+            else:
+                longitudinal_config = config.get("longitudinal", {})
+                longitudinal_result = compare_timepoints(
+                    current_t1c=current_t1c,
+                    current_seg=current_seg,
+                    prior_t1c=prior_t1c,
+                    prior_seg=prior_seg,
+                    output_dir=longitudinal_output_dir,
+                    config=longitudinal_config,
+                )
+                
+                # Store result as dict for JSON serialization
+                result["longitudinal"] = {
+                    "registration_quality": longitudinal_result.registration_quality,
+                    "rano_response": longitudinal_result.rano_response,
+                    "volume_changes": {
+                        region: {
+                            "prior_cc": change.prior_cc,
+                            "current_cc": change.current_cc,
+                            "abs_change_cc": change.abs_change_cc,
+                            "pct_change": change.pct_change,
+                            "status": change.status,
+                        }
+                        for region, change in longitudinal_result.volume_changes.items()
+                    },
+                    "registered_prior_path": str(longitudinal_result.registered_prior_path),
+                    "prior_seg_in_current_space_path": str(longitudinal_result.prior_seg_in_current_space_path),
+                    "overlay_paths": {
+                        orientation: str(path) for orientation, path in longitudinal_result.overlay_paths.items()
+                    },
+                }
+                logger.info(f"Longitudinal analysis complete: {longitudinal_result.rano_response}")
+        except Exception as exc:
+            logger.warning(f"Longitudinal analysis failed: {exc}")
+            result["longitudinal"] = None
 
     gc.collect()
     logger.info(f"Pipeline complete — {result['elapsed']:.1f}s")

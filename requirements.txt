@@ -6,11 +6,13 @@ einops
 
 # Medical Imaging I/O & Processing
 pydicom
+highdicom>=0.22
 nibabel
 SimpleITK
 pynrrd
 scikit-image
 scipy
+pynetdicom>=2.0
 
 # Radiomics & Analysis
 scikit-learn
@@ -29,3 +31,16 @@ tqdm
 psutil
 PyYAML
 python-dotenv
+
+# API and Service Infrastructure
+fastapi>=0.110
+uvicorn[standard]>=0.27
+celery[redis]>=5.3
+redis>=5.0
+sqlalchemy>=2.0
+alembic>=1.13
+pydantic-settings>=2.1
+python-multipart
+python-jose[cryptography]
+httpx
+pytest-asyncio

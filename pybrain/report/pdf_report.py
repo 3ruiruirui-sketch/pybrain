@@ -13,6 +13,8 @@ def generate_report(
     patient: Dict[str, Any],
     quality: Dict[str, Any],
     locale: str = "en",
+    longitudinal: Optional[Dict[str, Any]] = None,
+    mets: Optional[Dict[str, Any]] = None,
 ) -> Optional[Path]:
     """
     Generate a PDF research report.
@@ -78,6 +80,100 @@ def generate_report(
                         c.drawString(100, y, disclaimer[90:180])
             except Exception:
                 pass
+
+        # Longitudinal comparison section
+        if longitudinal is not None:
+            y -= 30
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(100, y, "Longitudinal Comparison")
+            c.setFont("Helvetica", 9)
+            y -= 20
+
+            # RANO assessment
+            rano_response = longitudinal.get("rano_response", "NE")
+            c.drawString(100, y, f"RANO Assessment: {rano_response}")
+            y -= 15
+
+            # Registration quality
+            nmi = longitudinal.get("registration_quality", 0.0)
+            c.drawString(100, y, f"Registration Quality (NMI): {nmi:.4f}")
+            y -= 15
+
+            # Volume changes table
+            volume_changes = longitudinal.get("volume_changes", {})
+            if volume_changes:
+                y -= 10
+                c.setFont("Helvetica-Bold", 9)
+                c.drawString(100, y, "Volume Changes:")
+                c.setFont("Helvetica", 8)
+                y -= 15
+
+                for region, change in volume_changes.items():
+                    prior = change.get("prior_cc", 0.0)
+                    current = change.get("current_cc", 0.0)
+                    pct = change.get("pct_change", 0.0)
+                    status = change.get("status", "stable")
+                    c.drawString(
+                        100, y,
+                        f"{region}: {prior:.1f} → {current:.1f} cc ({pct:+.1f}%) [{status}]"
+                    )
+                    y -= 12
+
+            # Research disclaimer
+            y -= 10
+            c.setFont("Helvetica-Oblique", 7)
+            c.drawString(100, y, "Research RANO interpretation; not for clinical use")
+            y -= 12
+
+        # Brain metastases section
+        if mets is not None:
+            y -= 30
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(100, y, "Brain Metastases Analysis")
+            c.setFont("Helvetica", 9)
+            y -= 20
+
+            # Total lesion count and volume
+            total_count = mets.get("total_lesion_count", 0)
+            total_volume = mets.get("total_lesion_volume_cc", 0.0)
+            c.drawString(100, y, f"Total Lesions: {total_count}")
+            y -= 15
+            c.drawString(100, y, f"Total Volume: {total_volume:.2f} cc")
+            y -= 15
+
+            # Detection and segmentation methods
+            detection_method = mets.get("detection_method", "unknown")
+            segmentation_method = mets.get("segmentation_method", "unknown")
+            c.drawString(100, y, f"Detection: {detection_method}")
+            y -= 15
+            c.drawString(100, y, f"Segmentation: {segmentation_method}")
+            y -= 15
+
+            # Lesion-by-lesion table
+            lesions = mets.get("lesions", [])
+            if lesions:
+                y -= 10
+                c.setFont("Helvetica-Bold", 9)
+                c.drawString(100, y, "Lesion Details:")
+                c.setFont("Helvetica", 8)
+                y -= 15
+
+                for lesion in lesions:
+                    lesion_id = lesion.get("id", "?")
+                    location = lesion.get("location", "Unknown")
+                    volume = lesion.get("volume_cc", 0.0)
+                    confidence = lesion.get("confidence", 0.0)
+                    c.drawString(
+                        100, y,
+                        f"#{lesion_id}: {location} - {volume:.2f} cc (conf: {confidence:.2f})"
+                    )
+                    y -= 12
+
+            # Research disclaimer
+            y -= 10
+            c.setFont("Helvetica-Oblique", 7)
+            c.drawString(100, y, "Research mets analysis; not for clinical use")
+            y -= 12
 
         c.drawString(100, y - 20, "RESEARCH USE ONLY — NOT FOR CLINICAL DIAGNOSIS")
         c.save()

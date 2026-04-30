@@ -1,13 +1,15 @@
-# Data — BraTS Dataset Acquisition
+# Data — Dataset Acquisition
 
 ## Overview
 
-PY-BRAIN uses the **BraTS2021** multi-modal brain tumor MRI dataset for
-algorithm development and validation. This document explains how to obtain
-the data legally and how to set it up for use with the pipeline.
+PY-BRAIN uses two primary datasets for algorithm development and validation:
+- **BraTS2021**: Multi-modal brain tumor MRI dataset for glioma segmentation
+- **Brain Metastases Datasets**: For mets detection and segmentation (Stanford BrainMetShare, BraTS-Mets 2024)
+
+This document explains how to obtain the data legally and how to set it up for use with the pipeline.
 
 > **⚠️ IMPORTANT**: No patient data, DICOM files, or NIfTI images are
-> included in this repository. You must download BraTS data separately
+> included in this repository. You must download data separately
 > following the steps below.
 
 ---
@@ -212,3 +214,87 @@ T1ce, T2, and FLAIR.
    in MR images." NeuroImage 125: 704-723
 4. TCIA: https://www.cancerimagingarchive.net/
 5. BraTS Challenge: https://www.syndata.org/
+
+---
+
+## Brain Metastases Datasets
+
+For the brain metastases (mets) analysis pipeline, PY-BRAIN supports two primary datasets:
+
+### Stanford BrainMetShare
+
+BrainMetShare is a public dataset of brain metastases cases with expert annotations.
+
+**Dataset Characteristics:**
+- ~156 patients with brain metastases
+- Multi-modal MRI (T1, T1c, T2, FLAIR)
+- Expert lesion annotations (per-lesion segmentations)
+- Publicly available for research use
+
+**How to Download:**
+
+1. Visit the BrainMetShare website (research.stanford.edu)
+2. Request access through their data use agreement
+3. Download the dataset
+4. Organize as:
+
+```
+data/datasets/BrainMetShare/
+├── patient_001/
+│   ├── T1.nii.gz
+│   ├── T1c.nii.gz
+│   ├── T2.nii.gz
+│   ├── FLAIR.nii.gz
+│   └── segmentation.nii.gz
+├── patient_002/
+│   └── ...
+```
+
+**Training Configuration:**
+
+```bash
+python scripts/12_train_mets_segmenter.py \
+    --data-dir data/datasets/BrainMetShare \
+    --output-dir models/mets_bundle \
+    --epochs 100 \
+    --batch-size 8
+```
+
+### BraTS-Mets 2024
+
+The BraTS-Mets challenge provides a standardized dataset for brain metastases segmentation.
+
+**Dataset Characteristics:**
+- Multi-institutional data
+- Standardized pre-processing
+- Per-lesion annotations
+- Training/validation/test splits
+
+**How to Download:**
+
+1. Register at the BraTS challenge website
+2. Request access to BraTS-Mets 2024
+3. Download the training data
+4. Organize in the same structure as BrainMetShare
+
+### Data Requirements for Mets Analysis
+
+**Required (for inference):**
+- T1c (post-contrast T1) - primary modality for detection
+- T1 (pre-contrast T1) - for context
+- T2 - for context
+- FLAIR - for context
+
+**Optional (for training):**
+- Per-lesion segmentation masks
+- Patient metadata
+
+### Mets vs Glioma Data Differences
+
+| Characteristic | Glioma (BraTS) | Mets (BrainMetShare) |
+|---------------|---------------|---------------------|
+| Lesion pattern | Single large mass | Multiple small lesions |
+| Annotation | Whole-tumor mask | Per-lesion masks |
+| Typical count | 1 tumor | 5-20+ lesions |
+| Volume range | 10-100+ cc | 0.1-5 cc per lesion |
+| Training approach | Full-volume segmentation | Per-lesion patch segmentation |

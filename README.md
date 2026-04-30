@@ -38,7 +38,6 @@
 | **Platt calibration** | ✅ Active | Per-subregion temperature scaling |
 | **STAPLE ensemble** | ✅ Implemented | Awaiting ensemble validation |
 | **SwinUNETR** | ⏸️ Disabled | Awaiting Platt calibration + channel verification |
-| **nnU-Net (DynUNet)** | ⏸️ Disabled | No validated pretrained weights available |
 
 **Validation**: Validated on BraTS2021 cases (internal runs, 2026-04-13).
 Full external validation pending.
@@ -128,10 +127,68 @@ python scripts/3_brain_tumor_analysis.py \
     --session-id BraTS2021_00000
 ```
 
+### 4. Export DICOM-SEG (Optional)
+
+For PACS integration and clinical workstation viewing (3D Slicer, OHIF, RadiAnt):
+
+```bash
+# Export segmentation as DICOM-SEG file
+python scripts/4_export_dicom_seg.py \
+    --segmentation results/BraTS2021_00000/segmentation_full.nii.gz \
+    --source-dicom data/datasets/BraTS2021/BraTS2021_00000/T1c/ \
+    --output results/BraTS2021_00000/segmentation.dcm
+```
+
+The DICOM-SEG file contains three segments (WT, TC, ET) with proper referencing to the source DICOM series.
+
+### 5. Export DICOM-SR (Optional)
+
+For quantitative measurements in PACS using TID 1500 (Measurement Report) template:
+
+```bash
+# Export measurements as DICOM-SR file
+python scripts/5_export_dicom_sr.py \
+    --measurements results/BraTS2021_00000/morphology.json \
+    --source-dicom data/datasets/BraTS2021/BraTS2021_00000/T1c/ \
+    --segmentation-dicom results/BraTS2021_00000/segmentation.dcm \
+    --output results/BraTS2021_00000/measurements.dcm
+```
+
+The DICOM-SR file contains volume measurements (WT, TC, ET, NC) in a machine-readable format for clinical workstations.
+
+### 6. Longitudinal Analysis (Optional)
+
+For comparing current scan with a prior scan to assess tumor response using RANO criteria:
+
+```bash
+# Compare current session with prior session
+python scripts/10_longitudinal_analysis.py \
+    --current results/BraTS2021_00000/ \
+    --prior results/BraTS2021_00000_prior/ \
+    --output results/BraTS2021_00000/longitudinal/
+```
+
+This performs rigid registration of the prior scan to the current scan, computes volume changes per subregion (WT, TC, ET), and applies RANO criteria for response assessment (CR, PR, SD, PD, NE). Results include:
+- Registration quality (NMI score)
+- Volume change table with percentage changes
+- RANO response classification
+- Side-by-side overlay images (axial, coronal, sagittal)
+
+**Note:** This is a research implementation of RANO criteria and should not be used for clinical decision-making.
+
 Results are written to `results/{session-id}/`:
 ```
 results/BraTS2021_00000/
 ├── segmentation_full.nii.gz     # Final segmentation (WT/TC/ET labels)
+├── segmentation.dcm             # DICOM-SEG file (if exported)
+├── measurements.dcm            # DICOM-SR file (if exported)
+├── longitudinal/               # Longitudinal analysis (if run)
+│   ├── longitudinal_results.json
+│   ├── prior_registered.nii.gz
+│   ├── prior_seg_registered.nii.gz
+│   ├── overlay_axial.png
+│   ├── overlay_coronal.png
+│   └── overlay_sagittal.png
 ├── probabilities_wt.nii.gz     # WT probability map
 ├── probabilities_tc.nii.gz     # TC probability map
 ├── probabilities_et.nii.gz     # ET probability map
@@ -140,7 +197,90 @@ results/BraTS2021_00000/
 └── report_BraTS2021_00000.pdf  # PDF report
 ```
 
-### 4. Validate Results
+### 7. PACS Integration (Optional)
+
+For automatic DICOM communication with PACS using Orthanc:
+
+```bash
+# Start Orthanc (development PACS)
+cd docker/orthanc
+docker compose up -d
+
+# Start PACS listener daemon
+python scripts/11_pacs_listener.py --config pybrain/config/defaults.yaml
+```
+
+The listener will:
+- Receive DICOM studies from PACS via C-STORE
+- Filter studies based on triage rules (modalities, series descriptions)
+- Automatically trigger the pipeline for matching studies
+- Auto-route results (DICOM-SEG, DICOM-SR) back to PACS
+
+**Configuration** (in `pybrain/config/defaults.yaml`):
+```yaml
+pacs:
+  enabled: true
+  local_ae_title: "PYBRAIN"
+  local_port: 11112
+  peer:
+    ae_title: "ORTHANC"
+    host: "localhost"
+    port: 4242
+  triage:
+    require_modalities: ["MR"]
+    require_series_descriptions: ["T1", "T1c", "T2", "FLAIR"]
+    auto_route_back: true
+```
+
+**Note:** This requires `pynetdicom>=2.0`. See [docs/technical/PACS_INTEGRATION.md](docs/technical/PACS_INTEGRATION.md) for full setup guide.
+
+### 8. API Quick Start (Optional)
+
+For running PY-BRAIN as a REST API service with async workers:
+
+```bash
+# Start the full stack with Docker Compose
+docker compose up -d
+
+# Run database migrations
+docker compose exec api alembic upgrade head
+
+# Verify deployment
+curl http://localhost:8000/health
+curl http://localhost:8000/ready
+
+# Open API documentation
+open http://localhost:8000/docs
+```
+
+The API service includes:
+- **FastAPI application** on port 8000
+- **Celery workers** for async job processing
+- **PostgreSQL** database for persistent storage
+- **Redis** for Celery broker and backend
+- **Orthanc** PACS (optional)
+- **Flower** for Celery monitoring on port 5555
+
+**Example usage:**
+```bash
+# Upload a case
+curl -X POST http://localhost:8000/cases \
+  -H "Authorization: Bearer dev-api-key-123" \
+  -F "files=@case.zip" \
+  -F "analysis_mode=auto"
+
+# Trigger segmentation
+curl -X POST http://localhost:8000/cases/{case_id}/segment \
+  -H "Authorization: Bearer dev-api-key-123"
+
+# Get results
+curl http://localhost:8000/cases/{case_id} \
+  -H "Authorization: Bearer dev-api-key-123"
+```
+
+See [docs/API.md](docs/API.md) for full API reference and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for deployment details.
+
+### 9. Validate Results
 
 ```bash
 python scripts/5_validate_segmentation.py \
@@ -220,7 +360,6 @@ Active and disabled models:
 | **Platt Calibration** | — | ✅ Active | Per-subregion temperature scaling |
 | **STAPLE** | — | ✅ Implemented | Awaiting ensemble validation |
 | **SwinUNETR** | 0.00 | ⏸️ Disabled | Awaiting Platt + channel-order verification |
-| **nnU-Net** | 0.00 | ⏸️ Disabled | No validated pretrained weights |
 
 Configuration file: `pybrain/config/defaults.yaml`
 
@@ -258,9 +397,8 @@ Full guide: [docs/technical/REPRODUCIBILITY.md](./docs/technical/REPRODUCIBILITY
 | 1 | SwinUNETR validation and activation | ⏸️ Pending |
 | 2 | Full regression test suite | 🔄 In progress |
 | 3 | STAPLE ensemble validation | 🔄 In progress |
-| 4 | nnU-Net bundle integration (when available) | ⏳ Awaiting upstream |
-| 5 | External multi-site validation | 🔜 Planned |
-| 6 | Zenodo DOI registration | 🔜 Planned |
+| 4 | External multi-site validation | 🔜 Planned |
+| 5 | Zenodo DOI registration | 🔜 Planned |
 
 ---
 
