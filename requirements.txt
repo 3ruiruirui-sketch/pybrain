@@ -13,6 +13,7 @@ pynrrd
 scikit-image
 scipy
 pynetdicom>=2.0
+rt-utils>=1.2.7
 
 # Radiomics & Analysis
 scikit-learn
