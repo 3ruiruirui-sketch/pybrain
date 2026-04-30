@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import re
 
 import nibabel as nib
 import numpy as np
@@ -24,6 +25,20 @@ logger = get_logger("core.input_validator")
 
 # Required BraTS modalities
 REQUIRED_MODALITIES = ["t1", "t1c", "t2", "flair"]
+
+# Order matters: more specific patterns first
+_MODALITY_PATTERNS = {
+    "t1c":   [r"_t1ce(?:\W|$|_)", r"_t1_?ce", r"_t1c(?:\W|$|_)", r"_t1\+c", r"_t1_gd",
+             r"^t1c(?:\W|$|_)", r"t1c\.(?:nii|nrrd)"],  # t1c.nii.gz
+    "flair": [r"_flair(?:\W|$|_)", r"_t2_?flair", r"^flair(?:\W|$|_)"],
+    "t2":    [r"_t2(?:\W|$|_)(?!flair)", r"^t2(?:\W|$|_)(?!flair)"],   # t2 but not t2_flair
+    "t1":    [r"_t1(?:\W|$|_)(?!ce|_ce|c|\+c|_gd)", r"^t1(?:\W|$|_)(?!ce|_ce|c|\+c|_gd)"],  # t1 but not t1ce/t1c/t1+c/t1_gd
+}
+
+def _is_more_specific(mod_a, mod_b):
+    """Return True if mod_a is more specific than mod_b (e.g. t1c > t1)."""
+    specificity = {"t1c": 3, "flair": 3, "t2": 2, "t1": 1}
+    return specificity.get(mod_a, 0) > specificity.get(mod_b, 0)
 
 # Alternative naming conventions
 MODALITY_ALIASES = {
@@ -189,25 +204,32 @@ def find_modality_file(
     subject_dir: Path,
     modality: str,
 ) -> Path | None:
-    """Find a modality file using known naming conventions.
-
-    Args:
-        subject_dir: Directory containing subject files.
-        modality: Canonical modality name (t1, t1c, t2, flair).
-
-    Returns:
-        Path to the found file, or None.
     """
-    aliases = MODALITY_ALIASES.get(modality, [modality])
-    extensions = [".nii.gz", ".nii", ".nrrd"]
+    Find the file in `directory` that corresponds to `modality`.
+    Uses precedence-ordered regex matching to avoid t1 matching t1ce, etc.
+    """
+    modality = modality.lower()
+    if modality not in _MODALITY_PATTERNS:
+        raise ValueError(f"Unknown modality: {modality}")
 
-    for alias in aliases:
-        for ext in extensions:
-            # Try exact match
-            for pattern in [f"*{alias}*{ext}", f"*_{alias}{ext}", f"*-{alias}{ext}"]:
-                matches = list(subject_dir.glob(pattern))
-                if matches:
-                    return matches[0]
+    candidates = list(subject_dir.glob("*.nii.gz")) + list(subject_dir.glob("*.nii"))
+    
+    # First, exclude candidates that match a more-specific modality
+    for other_mod, patterns in _MODALITY_PATTERNS.items():
+        if other_mod == modality:
+            continue
+        # Skip if `other_mod` is less specific than `modality` 
+        if _is_more_specific(modality, other_mod):
+            continue
+        candidates = [
+            c for c in candidates
+            if not any(re.search(p, c.name.lower()) for p in patterns)
+        ]
+    
+    # Now match against the modality's own patterns
+    for cand in candidates:
+        if any(re.search(p, cand.name.lower()) for p in _MODALITY_PATTERNS[modality]):
+            return cand
     return None
 
 
