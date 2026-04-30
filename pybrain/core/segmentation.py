@@ -94,7 +94,7 @@ def segment(
     ct_data: Optional[np.ndarray] = None,
 ) -> SegmentationResult:
     """
-    Run full tumour segmentation.
+    Run full tumour segmentation via the production ensemble.
 
     Parameters
     ----------
@@ -112,48 +112,44 @@ def segment(
     SegmentationResult
     """
     import time
+    from pybrain.core.normalization import zscore_robust
+    from pybrain.core.inference import run_ensemble_inference
 
     t0 = time.time()
 
-    from pybrain.core.normalization import zscore_robust
+    # Normalize each modality
+    normed = {name: zscore_robust(vol, brain_mask) for name, vol in volumes.items()}
 
-    # Normalise
-    normed = {}
-    for name, vol in volumes.items():
-        normed[name] = zscore_robust(vol, brain_mask)
+    # Resolve bundle_dir — must be set somewhere. Try config, then default.
+    bundle_dir = config.bundle_dir
+    if bundle_dir is None:
+        # Fall back to repo default
+        bundle_dir = Path(__file__).resolve().parent.parent.parent / "models" / "brats_bundle"
+        if not bundle_dir.exists():
+            raise FileNotFoundError(
+                f"bundle_dir not set on SegmentationConfig and default {bundle_dir} "
+                f"does not exist. Set config.bundle_dir to the model checkpoint directory."
+            )
 
-    # Stack → 4-channel tensor [1, 4, D, H, W]
-    order = ["T1", "T1c", "T2", "FLAIR"]
-    arrs = [normed[k] for k in order if k in normed]
-    tensor = np.stack(arrs, axis=0)[None]
-    tensor = tensor.astype(np.float32)
+    # Run the ensemble (single source of truth)
+    ensemble = run_ensemble_inference(
+        volumes=normed,
+        brain_mask=brain_mask,
+        config={
+            "ensemble_weights": config.ensemble_weights,
+            "swinunetr": getattr(config, "swinunetr_cfg", {}),
+            "sliding_window": getattr(config, "sliding_window_cfg", {}),
+            "calibration": {"enabled": True},
+        },
+        bundle_dir=bundle_dir,
+        device=config.device,
+    )
 
-    # ── Model inference (stub — delegates to existing scripts in production) ─
-    # In production this calls load_segresnet + run_segresnet_inference etc.
-    # For the library API we assume probability maps are supplied externally
-    # or we attempt lazy import.
-    wt_prob = np.zeros_like(arrs[0], dtype=np.float32)
-    tc_prob = np.zeros_like(arrs[0], dtype=np.float32)
-    et_prob = np.zeros_like(arrs[0], dtype=np.float32)
-    model_activated = True
+    wt_prob = ensemble.wt_prob
+    tc_prob = ensemble.tc_prob
+    et_prob = ensemble.et_prob
 
-    try:
-        from pybrain.models.segresnet import load_segresnet, run_segresnet_inference
-        import torch
-
-        if config.bundle_dir:
-            model = load_segresnet(str(config.bundle_dir), config.device)
-            prob = run_segresnet_inference(model, torch.from_numpy(tensor).to(config.device), config.device, {})
-            wt_prob = prob[1].cpu().numpy()
-            tc_prob = prob[2].cpu().numpy()
-            et_prob = prob[3].cpu().numpy()
-            del model
-            gc.collect()
-    except Exception as exc:
-        logger.warning(f"Model inference failed: {exc} — returning zero segmentation")
-        model_activated = False
-
-    # CT boost
+    # CT boost (unchanged)
     if ct_data is not None and config.ct_boost.get("enabled"):
         hu_min = config.ct_boost.get("min_hu", 35)
         hu_max = config.ct_boost.get("max_hu", 75)
@@ -161,41 +157,32 @@ def segment(
         ct_mask = (ct_data >= hu_min) & (ct_data <= hu_max)
         wt_prob[ct_mask] = np.clip(wt_prob[ct_mask] + boost, 0, 1)
 
-    # Threshold
+    # Threshold + nested constraint (TC ⊆ WT, ET ⊆ TC)
     wt_bin = (wt_prob > config.wt_threshold).astype(np.float32) * brain_mask
-    tc_bin = (tc_prob > config.tc_threshold).astype(np.float32) * brain_mask * wt_bin
-    et_bin = (et_prob > config.et_threshold).astype(np.float32) * brain_mask * tc_bin
+    tc_bin = (tc_prob > config.tc_threshold).astype(np.float32) * wt_bin
+    et_bin = (et_prob > config.et_threshold).astype(np.float32) * tc_bin
 
-    # Compose seg_full: 0=bg, 1=necrotic, 2=edema, 3=enhancing
+    # Compose: 0=bg, 1=necrotic, 2=edema, 3=enhancing
     seg_full = np.zeros_like(wt_bin, dtype=np.uint8)
-    seg_full[wt_bin > 0] = 2  # edema
-    seg_full[tc_bin > 0] = 1  # necrotic core
-    seg_full[et_bin > 0] = 3  # enhancing
+    seg_full[wt_bin > 0] = 2
+    seg_full[tc_bin > 0] = 1
+    seg_full[et_bin > 0] = 3
 
-    # Volumes
-    vox_vol_cc = 0.001  # 1 mm isotropic
+    vox_vol_cc = 0.001
     wt_cc = float(wt_bin.sum() * vox_vol_cc)
     tc_cc = float(tc_bin.sum() * vox_vol_cc)
     et_cc = float(et_bin.sum() * vox_vol_cc)
     nc_cc = tc_cc - et_cc
 
-    elapsed = time.time() - t0
-
-    # Model activation check
+    # Activation check (now meaningful — actual probabilities computed)
     max_prob = max(wt_prob.max(), tc_prob.max(), et_prob.max())
-    if max_prob < 0.10:
-        model_activated = False
+    model_activated = bool(max_prob >= 0.10)
 
     return SegmentationResult(
         seg_full=seg_full,
-        wt_prob=wt_prob,
-        tc_prob=tc_prob,
-        et_prob=et_prob,
+        wt_prob=wt_prob, tc_prob=tc_prob, et_prob=et_prob,
         brain_mask=brain_mask,
-        wt_cc=wt_cc,
-        tc_cc=tc_cc,
-        et_cc=et_cc,
-        nc_cc=nc_cc,
+        wt_cc=wt_cc, tc_cc=tc_cc, et_cc=et_cc, nc_cc=nc_cc,
         model_activated=model_activated,
-        elapsed=elapsed,
+        elapsed=time.time() - t0,
     )

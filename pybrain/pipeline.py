@@ -255,6 +255,7 @@ def run(
         et_threshold=config["thresholds"].get("et", 0.35),
         ensemble_weights=config.get("ensemble_weights", {}),
         device=config.get("hardware", {}).get("device", "cpu"),
+        bundle_dir=Path(config.get("bundle_dir", PROJECT_ROOT / "models" / "brats_bundle")),
     )
 
     # CT data
