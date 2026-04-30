@@ -27,6 +27,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """
@@ -45,6 +47,7 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     cfg.setdefault("ct_boost", {"enabled": False, "boost_factor": 0.15})
     cfg.setdefault("segmentation", {"non_gbm_ct_calc_threshold_cc": 200.0})
     cfg.setdefault("models", {})
+    cfg.setdefault("bundle_dir", PROJECT_ROOT / "models" / "brats_bundle")
 
     # Device auto-detection: MPS > CUDA > CPU
     try:

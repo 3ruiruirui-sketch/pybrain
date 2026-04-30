@@ -143,7 +143,7 @@ def segment(
 
         if config.bundle_dir:
             model = load_segresnet(str(config.bundle_dir), config.device)
-            prob = run_segresnet_inference(model, torch.from_tensor(tensor).to(config.device), config.device, {})
+            prob = run_segresnet_inference(model, torch.from_numpy(tensor).to(config.device), config.device, {})
             wt_prob = prob[1].cpu().numpy()
             tc_prob = prob[2].cpu().numpy()
             et_prob = prob[3].cpu().numpy()
