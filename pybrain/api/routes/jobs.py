@@ -9,9 +9,10 @@ from sqlalchemy import select
 import uuid
 
 from pybrain.api.db.base import get_db
-from pybrain.api.db.models import Job, Case
+from pybrain.api.db.models import Job, Case, User
 from pybrain.api.tasks import segment_case, longitudinal_compare, export_dicom
 from pybrain.api.audit import log_api_call
+from pybrain.api.main import verify_auth
 import logging
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 async def create_segmentation_job(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Enqueue a segmentation job for a case.
@@ -44,7 +46,7 @@ async def create_segmentation_job(
     job = Job(
         id=job_id,
         case_id=case_id,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         job_type="segment",
         status="pending",
         progress=0,
@@ -61,7 +63,7 @@ async def create_segmentation_job(
     # Log audit
     await log_api_call(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         action="create",
         resource_type="job",
         resource_id=job_id,
@@ -78,6 +80,7 @@ async def create_segmentation_job(
 async def get_job_status(
     job_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Get job status and progress.
@@ -97,7 +100,7 @@ async def get_job_status(
     # Log audit
     await log_api_call(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         action="read",
         resource_type="job",
         resource_id=job_id,
@@ -120,6 +123,7 @@ async def create_longitudinal_job(
     case_id: str,
     prior_case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Enqueue a longitudinal comparison job.
@@ -147,7 +151,7 @@ async def create_longitudinal_job(
     job = Job(
         id=job_id,
         case_id=case_id,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         job_type="longitudinal",
         status="pending",
         progress=0,
@@ -167,7 +171,7 @@ async def create_longitudinal_job(
     # Log audit
     await log_api_call(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         action="create",
         resource_type="job",
         resource_id=job_id,
@@ -185,6 +189,7 @@ async def create_export_job(
     case_id: str,
     formats: list[str],
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Enqueue a DICOM export job.
@@ -207,7 +212,7 @@ async def create_export_job(
     job = Job(
         id=job_id,
         case_id=case_id,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         job_type="export_dicom",
         status="pending",
         progress=0,
@@ -227,7 +232,7 @@ async def create_export_job(
     # Log audit
     await log_api_call(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         action="create",
         resource_type="job",
         resource_id=job_id,

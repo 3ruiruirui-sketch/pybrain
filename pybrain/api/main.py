@@ -3,17 +3,19 @@ FastAPI application for PY-BRAIN API.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 import redis.asyncio as redis
-from sqlalchemy import text
+from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
 from pybrain.api.config import settings
-from pybrain.api.db.base import engine, init_db
+from pybrain.api.db.base import engine, init_db, get_db
+from pybrain.api.db.models import User
 from pybrain.api.routes import cases, jobs
 
 logger = logging.getLogger(__name__)
@@ -104,9 +106,10 @@ async def readiness_check():
 # Auth middleware
 async def verify_auth(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> dict:
+    db: AsyncSession = Depends(get_db),
+) -> User:
     """
-    Verify JWT or API key authentication.
+    Verify JWT or API key authentication and return User object.
     In research mode, API keys are accepted.
     """
     if credentials is None:
@@ -120,12 +123,84 @@ async def verify_auth(
 
     # Check if it's an API key (research mode)
     if settings.api_keys and token in settings.api_keys:
-        return {"type": "api_key", "key": token}
+        # Look up user by api_key
+        result = await db.execute(
+            select(User).where(User.api_key == token, User.is_active == True)
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            # Create a default user for research mode
+            user = User(
+                username="research_user",
+                api_key=token,
+                is_active=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        return user
 
-    # TODO: Verify JWT token
-    # For now, accept any token in development mode
+    # Try JWT verification
+    try:
+        from jose import jwt, JWTError
+
+        payload = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise JWTError("Missing sub claim")
+
+        user = await db.get(User, int(user_id))
+        if user is None or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or inactive",
+            )
+        return user
+    except ImportError:
+        # python-jose not installed, fall back to development mode
+        pass
+    except JWTError as e:
+        if settings.environment == "development":
+            # Dev fallback: create default user
+            result = await db.execute(select(User).where(User.username == "dev"))
+            user = result.scalar_one_or_none()
+            if user is None:
+                user = User(
+                    username="dev",
+                    api_key="dev",
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {e}",
+        )
+
+    # Development mode fallback
     if settings.environment == "development":
-        return {"type": "jwt", "token": token}
+        result = await db.execute(select(User).where(User.username == "dev"))
+        user = result.scalar_one_or_none()
+        if user is None:
+            user = User(
+                username="dev",
+                api_key="dev",
+                is_active=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        return user
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -135,8 +210,8 @@ async def verify_auth(
 
 
 # Include routers
-app.include_router(cases.router, dependencies=[Depends(verify_auth)])
-app.include_router(jobs.router, dependencies=[Depends(verify_auth)])
+app.include_router(cases.router)
+app.include_router(jobs.router)
 
 
 # Root endpoint

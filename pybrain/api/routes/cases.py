@@ -15,10 +15,11 @@ import zipfile
 import tempfile
 
 from pybrain.api.db.base import get_db
-from pybrain.api.db.models import Case, Job, LongitudinalLink
+from pybrain.api.db.models import Case, Job, LongitudinalLink, User
 from pybrain.api.storage import storage
 from pybrain.api.audit import log_patient_data_access, log_patient_data_modification, log_api_call
 from pybrain.api.routes.jobs import create_segmentation_job
+from pybrain.api.main import verify_auth
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ async def create_case(
     patient_sex: Optional[str] = Form(None),
     analysis_mode: str = Form("auto"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Upload DICOM zip or NIfTI files and create a case.
@@ -61,7 +63,7 @@ async def create_case(
             shutil.copyfileobj(files.file, f)
 
         # Extract if zip file
-        if files.filename.endswith(".zip"):
+        if files.filename and files.filename.endswith(".zip"):
             extract_path = Path(tempfile.mkdtemp())
             with zipfile.ZipFile(temp_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
@@ -86,7 +88,7 @@ async def create_case(
     # Create case record
     case = Case(
         id=case_id,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         patient_name=patient_name,
         patient_age=patient_age,
         patient_sex=patient_sex,
@@ -100,7 +102,7 @@ async def create_case(
     # Log audit
     await log_patient_data_modification(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         case_id=case_id,
         action="create",
         new_values={
@@ -122,6 +124,7 @@ async def create_case(
 async def get_case(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Get case status and results.
@@ -141,7 +144,7 @@ async def get_case(
     # Log audit
     await log_patient_data_access(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         case_id=case_id,
     )
 
@@ -165,6 +168,7 @@ async def get_case(
 async def get_segmentation(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> FileResponse:
     """
     Download segmentation as NIfTI.
@@ -187,7 +191,7 @@ async def get_segmentation(
     # Log audit
     await log_patient_data_access(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         case_id=case_id,
     )
 
@@ -210,6 +214,7 @@ async def get_segmentation(
 async def get_report(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> FileResponse:
     """
     Download PDF report.
@@ -232,7 +237,7 @@ async def get_report(
     # Log audit
     await log_patient_data_access(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         case_id=case_id,
     )
 
@@ -255,6 +260,7 @@ async def get_report(
 async def get_dicom_seg(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> FileResponse:
     """
     Stream DICOM-SEG file.
@@ -277,7 +283,7 @@ async def get_dicom_seg(
     # Log audit
     await log_patient_data_access(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         case_id=case_id,
     )
 
@@ -300,6 +306,7 @@ async def get_dicom_seg(
 async def trigger_segmentation(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Trigger segmentation for a case.
@@ -327,6 +334,7 @@ async def trigger_longitudinal(
     case_id: str,
     prior_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Trigger longitudinal comparison between current and prior case.
@@ -357,6 +365,7 @@ async def trigger_longitudinal(
 async def delete_case(
     case_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
 ) -> Dict[str, Any]:
     """
     Soft delete a case (audit trail preserved).
@@ -380,7 +389,7 @@ async def delete_case(
     # Log audit
     await log_patient_data_modification(
         db=db,
-        user_id=1,  # TODO: Get from auth context
+        user_id=current_user.id,
         case_id=case_id,
         action="delete",
         old_values={"status": case.status},

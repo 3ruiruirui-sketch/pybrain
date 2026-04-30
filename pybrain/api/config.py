@@ -86,6 +86,14 @@ class Settings(BaseSettings):
         description="List of valid API keys for research mode authentication",
     )
 
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def parse_api_keys(cls, v):
+        """Parse comma-separated API keys string."""
+        if isinstance(v, str):
+            return [k.strip() for k in v.split(",") if k.strip()]
+        return v
+
     # CORS
     allowed_origins: List[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://localhost:8080"],
