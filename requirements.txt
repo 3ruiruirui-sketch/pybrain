@@ -44,3 +44,7 @@ python-multipart
 python-jose[cryptography]
 httpx
 pytest-asyncio
+
+# Async DB drivers
+asyncpg>=0.29
+aiosqlite>=0.19

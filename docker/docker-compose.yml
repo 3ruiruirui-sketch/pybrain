@@ -47,7 +47,7 @@ services:
       STORAGE_PATH: /data/pybrain
       JWT_SECRET: change-me-in-production
       ENVIRONMENT: development
-      API_KEYS: dev-api-key-123
+      API_KEYS: '["dev-api-key-123"]'
     volumes:
       - ./data/pybrain:/data/pybrain
       - ./pybrain:/app/pybrain
@@ -82,7 +82,7 @@ services:
       STORAGE_PATH: /data/pybrain
       JWT_SECRET: change-me-in-production
       ENVIRONMENT: development
-      API_KEYS: dev-api-key-123
+      API_KEYS: '["dev-api-key-123"]'
     volumes:
       - ./data/pybrain:/data/pybrain
       - ./pybrain:/app/pybrain

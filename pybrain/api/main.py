@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 import redis.asyncio as redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
@@ -77,7 +78,7 @@ async def readiness_check():
     # Check Database
     try:
         async with engine.begin() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         db_status = "healthy"
     except Exception as e:
         logger.error(f"Database health check failed: {e}")

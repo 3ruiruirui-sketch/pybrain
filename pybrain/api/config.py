@@ -18,6 +18,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Async database drivers
+    _ASYNC_DRIVERS = (
+        "postgresql+asyncpg://",
+        "sqlite+aiosqlite://",
+        "mysql+aiomysql://",
+        "mysql+asyncmy://",
+    )
+
     # Application
     app_name: str = "PY-BRAIN API"
     app_version: str = "0.1.0"
@@ -134,9 +142,11 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v: str) -> str:
-        """Ensure database URL uses async driver."""
-        if not v.startswith("postgresql+asyncpg://"):
-            raise ValueError("DATABASE_URL must use postgresql+asyncpg:// driver")
+        """Ensure database URL uses an async driver."""
+        if not any(v.startswith(d) for d in cls._ASYNC_DRIVERS):
+            raise ValueError(
+                f"DATABASE_URL must use one of: {', '.join(cls._ASYNC_DRIVERS)}"
+            )
         return v
 
     @field_validator("storage_backend")
