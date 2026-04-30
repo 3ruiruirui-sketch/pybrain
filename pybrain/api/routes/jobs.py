@@ -20,33 +20,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-@router.post("/segment", response_model=Dict[str, Any])
-async def create_segmentation_job(
+async def _enqueue_segmentation_job(
     case_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(verify_auth),
+    db: AsyncSession,
+    user: User,
 ) -> Dict[str, Any]:
-    """
-    Enqueue a segmentation job for a case.
-
-    Args:
-        case_id: Case ID to segment
-
-    Returns:
-        Job ID and initial status
-    """
-    # Verify case exists
+    """Enqueue a segmentation job — pure logic, no FastAPI deps."""
     result = await db.execute(select(Case).where(Case.id == case_id))
     case = result.scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
 
-    # Create job record
     job_id = str(uuid.uuid4())
     job = Job(
         id=job_id,
         case_id=case_id,
-        user_id=current_user.id,
+        user_id=user.id,
         job_type="segment",
         status="pending",
         progress=0,
@@ -55,7 +44,6 @@ async def create_segmentation_job(
     db.add(job)
     await db.commit()
 
-    # Enqueue Celery task
     task = segment_case.delay(case_id)
     job.celery_task_id = task.id
     await db.commit()
@@ -63,17 +51,23 @@ async def create_segmentation_job(
     # Log audit
     await log_api_call(
         db=db,
-        user_id=current_user.id,
+        user_id=user.id,
         action="create",
         resource_type="job",
         resource_id=job_id,
     )
 
-    return {
-        "job_id": job_id,
-        "status": "pending",
-        "celery_task_id": task.id,
-    }
+    return {"job_id": job_id, "status": "pending", "celery_task_id": task.id}
+
+
+@router.post("/segment", response_model=Dict[str, Any])
+async def create_segmentation_job(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(verify_auth),
+) -> Dict[str, Any]:
+    """HTTP endpoint wrapper around _enqueue_segmentation_job."""
+    return await _enqueue_segmentation_job(case_id, db, current_user)
 
 
 @router.get("/{job_id}", response_model=Dict[str, Any])

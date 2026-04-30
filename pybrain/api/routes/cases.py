@@ -18,7 +18,7 @@ from pybrain.api.db.base import get_db
 from pybrain.api.db.models import Case, Job, LongitudinalLink, User
 from pybrain.api.storage import storage
 from pybrain.api.audit import log_patient_data_access, log_patient_data_modification, log_api_call
-from pybrain.api.routes.jobs import create_segmentation_job
+from pybrain.api.routes.jobs import _enqueue_segmentation_job
 from pybrain.api.auth import verify_auth
 import logging
 
@@ -324,7 +324,7 @@ async def trigger_segmentation(
         raise HTTPException(status_code=404, detail="Case not found")
 
     # Create segmentation job
-    job_result = await create_segmentation_job(case_id, db)
+    job_result = await _enqueue_segmentation_job(case_id, db, current_user)
 
     return job_result
 
