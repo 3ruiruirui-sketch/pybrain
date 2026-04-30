@@ -12,7 +12,7 @@ from pybrain.api.db.base import get_db
 from pybrain.api.db.models import Job, Case, User
 from pybrain.api.tasks import segment_case, longitudinal_compare, export_dicom
 from pybrain.api.audit import log_api_call
-from pybrain.api.main import verify_auth
+from pybrain.api.auth import verify_auth
 import logging
 
 logger = logging.getLogger(__name__)

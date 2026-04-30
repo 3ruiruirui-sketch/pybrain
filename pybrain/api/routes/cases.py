@@ -1,5 +1,5 @@
 """
-Case management routes.
+Cases API routes for managing segmentation cases.
 """
 
 from typing import Dict, Any, Optional
@@ -19,7 +19,7 @@ from pybrain.api.db.models import Case, Job, LongitudinalLink, User
 from pybrain.api.storage import storage
 from pybrain.api.audit import log_patient_data_access, log_patient_data_modification, log_api_call
 from pybrain.api.routes.jobs import create_segmentation_job
-from pybrain.api.main import verify_auth
+from pybrain.api.auth import verify_auth
 import logging
 
 logger = logging.getLogger(__name__)
