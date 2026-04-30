@@ -14,9 +14,13 @@ No config file editing needed.
 
 import sys
 import os
+import re
 import json
+import typing
 import subprocess
 import threading
+import tempfile
+import shutil
 from collections import defaultdict
 from pathlib import Path
 from datetime import datetime
@@ -31,27 +35,48 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+
 # ─────────────────────────────────────────────────────────────────────────
 # COLOURS
 # ─────────────────────────────────────────────────────────────────────────
 class C:
-    RESET  = "\033[0m";  BOLD   = "\033[1m"
-    CYAN   = "\033[96m"; GREEN  = "\033[92m"
-    YELLOW = "\033[93m"; RED    = "\033[91m"
-    BLUE   = "\033[94m"; GREY   = "\033[90m"
-    WHITE  = "\033[97m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BLUE = "\033[94m"
+    GREY = "\033[90m"
+    WHITE = "\033[97m"
+
 
 def header(text):
     w = 65
-    print(f"\n{C.CYAN}{'═'*w}{C.RESET}")
+    print(f"\n{C.CYAN}{'═' * w}{C.RESET}")
     print(f"{C.CYAN}{C.BOLD}  {text}{C.RESET}")
-    print(f"{C.CYAN}{'═'*w}{C.RESET}")
+    print(f"{C.CYAN}{'═' * w}{C.RESET}")
 
-def ok(t):    print(f"  {C.GREEN}✅{C.RESET} {t}")
-def info(t):  print(f"  {C.BLUE}ℹ{C.RESET}  {t}")
-def warn(t):  print(f"  {C.YELLOW}⚠️ {C.RESET} {t}")
-def err(t):   print(f"  {C.RED}❌{C.RESET} {t}")
-def step(n,t):print(f"\n{C.BOLD}{C.WHITE}[{n}] {t}{C.RESET}")
+
+def ok(t):
+    print(f"  {C.GREEN}✅{C.RESET} {t}")
+
+
+def info(t):
+    print(f"  {C.BLUE}ℹ{C.RESET}  {t}")
+
+
+def warn(t):
+    print(f"  {C.YELLOW}⚠️ {C.RESET} {t}")
+
+
+def err(t):
+    print(f"  {C.RED}❌{C.RESET} {t}")
+
+
+def step(n, t):
+    print(f"\n{C.BOLD}{C.WHITE}[{n}] {t}{C.RESET}")
+
 
 def ask(prompt, default="", required=True):
     sfx = f" [{C.GREY}{default}{C.RESET}]" if default else ""
@@ -62,6 +87,7 @@ def ask(prompt, default="", required=True):
         if val or not required:
             return val
         warn("This field is required.")
+
 
 def ask_yn(prompt, default="y"):
     opts = f"{C.GREEN}Y{C.RESET}/n" if default == "y" else f"y/{C.GREEN}N{C.RESET}"
@@ -76,11 +102,18 @@ def ask_yn(prompt, default="y"):
         return default == "y"
     return (default == "y") if not val else val in ("y", "yes")
 
-def ask_path(prompt: str, must_exist: bool = True) -> Path: # type: ignore
+
+def ask_path(prompt: str, must_exist: bool = True) -> Path:  # type: ignore
     while True:
-        raw  = input(f"  {C.CYAN}›{C.RESET} {prompt}\n    {C.GREY}(drag folder from Finder or type path){C.RESET}\n    Path: ").strip()
+        try:
+            raw = input(
+                f"  {C.CYAN}›{C.RESET} {prompt}\n    {C.GREY}(drag folder from Finder or type path){C.RESET}\n    Path: "
+            ).strip()
+        except (OSError, EOFError):
+            err(f"Non-interactive environment — cannot read input: {prompt}")
+            raise
         # remove quotes that Finder drag sometimes adds
-        raw  = raw.strip("'\"")
+        raw = raw.strip("'\"")
         path = Path(os.path.expandvars(os.path.expanduser(raw)))
         if must_exist and not path.exists():
             err(f"Not found: {path}")
@@ -90,6 +123,7 @@ def ask_path(prompt: str, must_exist: bool = True) -> Path: # type: ignore
             err("That is a file, not a folder. Please provide a folder path.")
             continue
         return path
+
 
 def pick(prompt: str, options: list, allow_none: bool = False):
     print(f"\n  {C.BOLD}{prompt}{C.RESET}")
@@ -103,9 +137,11 @@ def pick(prompt: str, options: list, allow_none: bool = False):
             if allow_none and n == 0:
                 return None
             if 1 <= n <= len(options):
-                return options[n-1]
-        except ValueError:
-            pass
+                return options[n - 1]
+        except (ValueError, OSError, EOFError):
+            if not sys.stdin.isatty():
+                warn("Non-interactive environment — using default (first option).")
+                return None if allow_none else options[0]
         warn(f"Enter a number between {'0' if allow_none else '1'} and {len(options)}")
 
 
@@ -113,70 +149,125 @@ def pick(prompt: str, options: list, allow_none: bool = False):
 # DICOM SCANNER
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def _guess_type(name):
+    import re
     n = name.lower()
     # IGNORE first
-    if any(x in n for x in [
-        "local","scout","topogram","dose","report","999",
-        "backup","log","thumb","preview"]):
+    if any(
+        x in n for x in ["local", "scout", "topogram", "dose", "report", "999", "backup", "log", "thumb", "preview"]
+    ):
         return "IGNORE"
     # T1c BEFORE T1 (civ = contrast IV)
-    if any(x in n for x in [
-        "civ","_civ","contrast","gad","post","t1c","t1+","+c",
-        "t1_ce","t1ce","t1_gd"]):
+    # Use word boundary matching to prevent 't1c' from matching 't1' in 'posterior_fossa_t1'
+    t1c_patterns = ["civ", "_civ", "contrast", "gad", "postcontrast", "post_gad", "post_contrast", "t1c", "t1+", "+c", "t1_ce", "t1ce", "t1_gd"]
+    if any(re.search(rf"\b{re.escape(x)}\b", n) for x in t1c_patterns):
         return "T1c"
     # T1 3D
-    if any(x in n for x in [
-        "mprage","mp2rage","t1_mprage","t1_3d","t1_sag","3d_t1",
-        "ax_t1","t1_ax","cor_t1","sag_t1","t1_se","t1_tse","t1w"]):
+    t1_patterns = [
+        "mprage",
+        "mp2rage",
+        "t1_mprage",
+        "t1_3d",
+        "t1_sag",
+        "3d_t1",
+        "ax_t1",
+        "t1_ax",
+        "cor_t1",
+        "sag_t1",
+        "t1_se",
+        "t1_tse",
+        "t1w",
+        "t1",
+    ]
+    if any(re.search(rf"\b{re.escape(x)}\b", n) for x in t1_patterns):
         return "T1"
     # FLAIR
-    if any(x in n for x in [
-        "flair","tirm","darkfluid","dark_fluid","dark-fluid",
-        "t2_flair","fse_flair","t2flair"]):
+    if any(
+        x in n for x in ["flair", "tirm", "darkfluid", "dark_fluid", "dark-fluid", "t2_flair", "fse_flair", "t2flair"]
+    ):
         return "FLAIR"
     # ADC before DWI
-    if any(x in n for x in ["adc","apparent_diff","_adc_"]) or n.endswith("adc"):
+    if any(x in n for x in ["adc", "apparent_diff", "_adc_"]) or n.endswith("adc"):
         return "ADC"
     # DWI
-    if any(x in n for x in [
-        "tracew","trace","dwi","diff","diffusion","ep2d_diff","dti"]):
+    if any(x in n for x in ["tracew", "trace", "dwi", "diff", "diffusion", "ep2d_diff", "dti"]):
         return "DWI"
     # T2*
-    if any(x in n for x in [
-        "hemo","t2star","t2_star","fl2d","t2*","gre","swi","haemo"]):
+    if any(x in n for x in ["hemo", "t2star", "t2_star", "fl2d", "t2*", "gre", "swi", "haemo"]):
         return "T2star"
     # T2 (after flair/t2star)
-    if any(x in n for x in [
-        "pd+t2","pd_t2","t2_tse","t2_fse","t2_tra","t2_cor",
-        "t2_sag","t2w","tse_t2","t2"]):
+    if any(x in n for x in ["pd+t2", "pd_t2", "t2_tse", "t2_fse", "t2_tra", "t2_cor", "t2_sag", "t2w", "tse_t2", "t2"]):
         return "T2"
     # CT bone
-    if any(x in n for x in ["osso","bone","osseo"]):
+    if any(x in n for x in ["osso", "bone", "osseo"]):
         return "CT_bone"
     # CT brain
-    if any(x in n for x in ["cranio","std","ct_brain","encefal"]):
+    if any(x in n for x in ["cranio", "std", "ct_brain", "encefal"]):
         return "CT_brain"
     return "UNKNOWN"
 
 
 # Known container folder names — these hold series but are not series themselves
 _CONTAINERS = {
-    "rm_cranio","rm cranio","rmcranio",
-    "tc_cranio","tc cranio","tccranio",
-    "dicom","dcm","images","img","data","raw","scan","cd","cdrom",
-    "disc","disk","root","backup","backups","patient","study","series",
-    "cache","thumb","preview",
+    "rm_cranio",
+    "rm cranio",
+    "rmcranio",
+    "tc_cranio",
+    "tc cranio",
+    "tccranio",
+    "dicom",
+    "dcm",
+    "images",
+    "img",
+    "data",
+    "raw",
+    "scan",
+    "cd",
+    "cdrom",
+    "disc",
+    "disk",
+    "root",
+    "backup",
+    "backups",
+    "patient",
+    "study",
+    "series",
+    "cache",
+    "thumb",
+    "preview",
 }
 
 # Directories that are NEVER DICOM — skip entirely during scanning
 _IGNORE_DIRS = {
-    ".venv", "venv", ".env", "env", "__pycache__", ".git", ".svn",
-    "node_modules", ".tox", ".mypy_cache", ".pytest_cache",
-    "models", "results", "scripts", "config", ".agents", ".gemini",
-    "nifti", "monai_ready", "extra_sequences", "brats_bundle",
-    "site-packages", "dist-info", "lib", "bin", "include",
+    ".venv",
+    "venv",
+    ".env",
+    "env",
+    "__pycache__",
+    ".git",
+    ".svn",
+    "node_modules",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    "models",
+    "results",
+    "scripts",
+    "config",
+    ".agents",
+    ".gemini",
+    "nifti",
+    "monai_ready",
+    "extra_sequences",
+    "brats_bundle",
+    "site-packages",
+    "dist-info",
+    "lib",
+    "bin",
+    "include",
 }
+
 
 def _should_skip_dir(path: Path) -> bool:
     """Check if any component of the path is in _IGNORE_DIRS."""
@@ -187,6 +278,7 @@ def _should_skip_dir(path: Path) -> bool:
         if part.startswith(".") and part not in (".", ".."):
             return True
     return False
+
 
 def scan_folder(root: Path) -> dict:
     """
@@ -212,7 +304,7 @@ def scan_folder(root: Path) -> dict:
         if _should_skip_dir(rel):
             continue
         ext = f.suffix.lower()
-        if ext in (".dcm", ".ima", ".img", "") :
+        if ext in (".dcm", ".ima", ".img", ""):
             all_files.append(f)
 
     if not all_files:
@@ -230,9 +322,7 @@ def scan_folder(root: Path) -> dict:
             all_files.append(f)
 
     # Group by immediate parent
-    import typing
-    from collections import defaultdict
-    groups: typing.DefaultDict[Path, list[Path]] = defaultdict(list) # type: ignore
+    groups: typing.DefaultDict[Path, list[Path]] = defaultdict(list)  # type: ignore
     for f in all_files:
         groups[f.parent].append(f)
 
@@ -244,35 +334,47 @@ def scan_folder(root: Path) -> dict:
         # Skip known container names
         if fname.lower() in _CONTAINERS:
             continue
-        n_files  = len(files)
+        n_files = len(files)
         seq_type = _guess_type(fname)
         # Skip IGNORE folders with very few files
         if seq_type == "IGNORE" and n_files < 5:
             continue
         result[fname] = {
-            "path":    folder_path,
+            "path": folder_path,
             "n_files": n_files,
-            "type":    seq_type,
+            "type": seq_type,
         }
 
     return result
 
+
 ROLE_FROM_TYPE = {
-    "T1":"T1", "T1c":"T1c", "T2":"T2", "FLAIR":"FLAIR",
-    "DWI":"DWI", "ADC":"ADC", "T2star":"T2star",
-    "CT_brain":"CT", "CT_bone":"CT_bone",
+    "T1": "T1",
+    "T1c": "T1c",
+    "T2": "T2",
+    "FLAIR": "FLAIR",
+    "DWI": "DWI",
+    "ADC": "ADC",
+    "T2star": "T2star",
+    "CT_brain": "CT",
+    "CT_bone": "CT_bone",
 }
 
-REQUIRED = {"T1":"T1 pre-contrast (3D MPRAGE)",
-            "T1c":"T1 post-contrast (after IV contrast)",
-            "T2":"T2 axial",
-            "FLAIR":"T2 FLAIR / TIRM Dark-Fluid"}
+REQUIRED = {
+    "T1": "T1 pre-contrast (3D MPRAGE)",
+    "T1c": "T1 post-contrast (after IV contrast)",
+    "T2": "T2 axial",
+    "FLAIR": "T2 FLAIR / TIRM Dark-Fluid",
+}
 
-OPTIONAL = {"DWI":"Diffusion Weighted Imaging",
-            "ADC":"ADC map",
-            "T2star":"T2* haemosiderin/calcification",
-            "CT":"CT brain (soft tissue window)",
-            "CT_bone":"CT bone window"}
+OPTIONAL = {
+    "DWI": "Diffusion Weighted Imaging",
+    "ADC": "ADC map",
+    "T2star": "T2* haemosiderin/calcification",
+    "CT": "CT brain (soft tissue window)",
+    "CT_bone": "CT bone window",
+}
+
 
 def auto_assign(series: dict) -> dict[str, str]:
     """
@@ -287,37 +389,35 @@ def auto_assign(series: dict) -> dict[str, str]:
     """
 
     # Score keywords — higher = better candidate for that role
-    T1_PREFER    = ["mprage","mp2rage","iso","3d","t1_3d"]
-    T1_AVOID     = ["ax_t1","cor_t1","sag_t1","ax_","cor_","sag_",
-                    "_3","_4","_5","_6"]   # numbered axial variants
-    T1C_PREFER   = ["_tra_","tra","axial","ax"]
-    T1C_AVOID    = ["_cor_","_sag_","coronal","sagittal"]
-    T2_PREFER    = ["_tra_","tra","tse","fse","axial"]
-    T2_AVOID     = ["_cor_","cor","30mm","thick"]
+    T1_PREFER = ["mprage", "mp2rage", "iso", "3d", "t1_3d"]
+    T1_AVOID = ["ax_t1", "cor_t1", "sag_t1", "ax_", "cor_", "sag_", "_3", "_4", "_5", "_6"]  # numbered axial variants
+    T1C_PREFER = ["_tra_", "tra", "axial", "ax"]
+    T1C_AVOID = ["_cor_", "_sag_", "coronal", "sagittal"]
+    T2_PREFER = ["_tra_", "tra", "tse", "fse", "axial"]
+    T2_AVOID = ["_cor_", "cor", "30mm", "thick"]
 
     def score(fname: str, prefer: list[str], avoid: list[str]) -> int:
         n = fname.lower()
         s: int = 0
         for p in prefer:
             if p in n:
-                s += 10 # type: ignore
+                s += 10  # type: ignore
         for a in avoid:
             if a in n:
-                s -= 5 # type: ignore
+                s -= 5  # type: ignore
         # More files generally = higher resolution = better
         n_files = int(series.get(fname, {}).get("n_files", 0))
-        s += n_files // 20 # type: ignore
+        s += n_files // 20  # type: ignore
         return s
 
     # Group candidates by role
-    import typing
     candidates: dict[str, list[str]] = {}
     for fname, d in series.items():
         role = ROLE_FROM_TYPE.get(d["type"])
         if role:
             candidates.setdefault(role, []).append(fname)
 
-    out  = {}
+    out = {}
     used = set()
 
     for role, fnames in candidates.items():
@@ -345,16 +445,24 @@ def auto_assign(series: dict) -> dict[str, str]:
 # SESSION
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def save_session(sess, out_dir):
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     path = Path(out_dir) / "session.json"
+
     def _s(o):
-        if isinstance(o, Path): return str(o)
-        if isinstance(o, dict): return {k:_s(v) for k,v in o.items()}
-        if isinstance(o, list): return [_s(v) for v in o]
+        if isinstance(o, Path):
+            return str(o)
+        if isinstance(o, dict):
+            return {k: _s(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_s(v) for v in o]
         return o
-    with open(path,"w") as f:
+
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
         json.dump(_s(sess), f, indent=2)
+    shutil.move(str(tmp), str(path))
     return path
 
 
@@ -362,22 +470,23 @@ def save_session(sess, out_dir):
 # PATIENT INFO EXTRACTION
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def extract_patient_info_from_dicom(dicom_dir):
     """Scan for the first valid DICOM file and extract patient details."""
     dicom_path = Path(dicom_dir)
     # Search for first .dcm or .IMA
     first_file = None
-    for ext in ['**/*.dcm', '**/*.IMA']:
+    for ext in ["**/*.dcm", "**/*.IMA"]:
         try:
             first_file = next(dicom_path.glob(ext))
             break
         except StopIteration:
             continue
-            
+
     if not first_file:
         # Fallback to any file if extensions are missing
-        for f in dicom_path.rglob('*'):
-            if f.is_file() and not f.name.startswith('.') and not _should_skip_dir(f.relative_to(dicom_path)):
+        for f in dicom_path.rglob("*"):
+            if f.is_file() and not f.name.startswith(".") and not _should_skip_dir(f.relative_to(dicom_path)):
                 first_file = f
                 break
 
@@ -386,51 +495,46 @@ def extract_patient_info_from_dicom(dicom_dir):
 
     try:
         ds = pydicom.dcmread(str(first_file), stop_before_pixels=True)
-        raw_name = str(getattr(ds, 'PatientName', 'Unknown'))
-        clean_name = raw_name.replace('^', ' ').strip() if raw_name != 'Unknown' else 'Unknown'
-        
-        raw_age = str(getattr(ds, 'PatientAge', 'Unknown'))
-        clean_age = raw_age.replace('Y', '').strip() if raw_age != 'Unknown' else 'Unknown'
-        
-        clean_sex = str(getattr(ds, 'PatientSex', 'Unknown')).strip()
-        
-        return {
-            "name": clean_name or "Unknown",
-            "age": clean_age or "Unknown",
-            "sex": clean_sex or "Unknown"
-        }
+        raw_name = str(getattr(ds, "PatientName", "Unknown"))
+        clean_name = raw_name.replace("^", " ").strip() if raw_name != "Unknown" else "Unknown"
+
+        raw_age = str(getattr(ds, "PatientAge", "Unknown"))
+        clean_age = raw_age.replace("Y", "").strip() if raw_age != "Unknown" else "Unknown"
+
+        clean_sex = str(getattr(ds, "PatientSex", "Unknown")).strip()
+
+        return {"name": clean_name or "Unknown", "age": clean_age or "Unknown", "sex": clean_sex or "Unknown"}
     except Exception:
         return {"name": "Unknown", "age": "Unknown", "sex": "Unknown"}
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # WIZARD
 # ─────────────────────────────────────────────────────────────────────────
 
+
 def wizard():
 
     print(f"""
-{C.CYAN}{'═'*65}
+{C.CYAN}{"═" * 65}
 {C.BOLD}  PY-BRAIN  —  Brain Tumour AI Analysis Pipeline
 {C.RESET}{C.CYAN}  MONAI BraTS SegResNet  |  Research Use Only
-{'═'*65}{C.RESET}
+{"═" * 65}{C.RESET}
 """)
 
-    import typing
-    sess: dict[str, typing.Any] = {"created": datetime.now().isoformat(),
-            "project_root": str(PROJECT_ROOT)}
+    sess: dict[str, typing.Any] = {"created": datetime.now().isoformat(), "project_root": str(PROJECT_ROOT)}
 
     # ── Previous session? ─────────────────────────────────────────────
     # Search in PROJECT_ROOT and also common alternative locations
     search_roots = [
         PROJECT_ROOT,
         Path.home() / "documents" / "PY-BRAIN",
-        Path.home() / "Downloads"  / "PY-BRAIN",
-        Path.home() / "Documents"  / "PY-BRAIN",
+        Path.home() / "Downloads" / "PY-BRAIN",
+        Path.home() / "Documents" / "PY-BRAIN",
     ]
     prev = []
     for root in search_roots:
-        prev += sorted(root.glob("results/*/session.json")) \
-                if root.exists() else []
+        prev += sorted(root.glob("results/*/session.json")) if root.exists() else []
     prev = sorted(set(prev))
     if prev:
         info(f"Found {len(prev)} previous session(s).")
@@ -470,14 +574,14 @@ def wizard():
   {C.GREY}Tip: Drag the folder from Finder into this Terminal window{C.RESET}
 """)
 
-    step("1a","DICOM study folder")
+    step("1a", "DICOM study folder")
     dicom_dir = ask_path("Path to DICOM root folder:")
 
     sess["mri_dicom_dir"] = str(dicom_dir)
-    sess["ct_dicom_dir"]  = str(dicom_dir)
+    sess["ct_dicom_dir"] = str(dicom_dir)
 
     # ── Scan ──────────────────────────────────────────────────────────
-    step("1b","Scanning DICOM folder recursively…")
+    step("1b", "Scanning DICOM folder recursively…")
     all_series: dict[str, dict] = scan_folder(dicom_dir)
 
     if not all_series:
@@ -485,23 +589,22 @@ def wizard():
         sys.exit(1)
 
     mri_count = sum(1 for d in all_series.values() if d["type"] not in ("IGNORE", "UNKNOWN", "CT_brain", "CT_bone"))
-    ct_count  = sum(1 for d in all_series.values() if d["type"] in ("CT_brain", "CT_bone"))
+    ct_count = sum(1 for d in all_series.values() if d["type"] in ("CT_brain", "CT_bone"))
 
     ok(f"Found {mri_count} MRI + {ct_count} CT series")
     print()
     print(f"  {'Folder':<38}  {'Files':>5}  {'Detected type'}")
-    print(f"  {'─'*38}  {'─'*5}  {'─'*18}")
+    print(f"  {'─' * 38}  {'─' * 5}  {'─' * 18}")
     for nm, d in all_series.items():
-        col = (C.GREEN  if d["type"] not in ("IGNORE","UNKNOWN") else
-               C.GREY   if d["type"] == "IGNORE" else C.YELLOW)
+        col = C.GREEN if d["type"] not in ("IGNORE", "UNKNOWN") else C.GREY if d["type"] == "IGNORE" else C.YELLOW
         print(f"  {nm[:38]:<38}  {d['n_files']:>5}  {col}{d['type']}{C.RESET}")
 
     # ─────────────────────────────────────────────────────────────────
     header("STEP 2 — PATIENT INFORMATION")
     info("Extracting automatically from DICOM headers...")
-    
+
     p = extract_patient_info_from_dicom(dicom_dir)
-    sess['patient'] = p
+    sess["patient"] = p
     print(f"  {C.GREEN}✅ Auto-detected Patient: {p['name']} ({p['age']}y, {p['sex']}){C.RESET}")
     input(f"\n  {C.CYAN}›{C.RESET} Press Enter to continue...")
 
@@ -513,17 +616,17 @@ def wizard():
     asgn: dict[str, str] = auto_assign(all_series)
 
     print(f"  {'Role':<10}  {'Assigned folder':<40}  Status")
-    print(f"  {'─'*10}  {'─'*40}  {'─'*10}")
+    print(f"  {'─' * 10}  {'─' * 40}  {'─' * 10}")
     for role, desc in {**REQUIRED, **OPTIONAL}.items():
-        folder = str(asgn.get(role,""))
-        n      = all_series.get(folder, {}).get("n_files", 0) if folder else 0
+        folder = str(asgn.get(role, ""))
+        n = all_series.get(folder, {}).get("n_files", 0) if folder else 0
         if folder:
             status = f"{C.GREEN}✅ auto-matched{C.RESET}"
         elif role in REQUIRED:
             status = f"{C.RED}❌ REQUIRED — not found{C.RESET}"
         else:
             status = f"{C.GREY}── optional{C.RESET}"
-        folder_str = folder[:40] # type: ignore
+        folder_str = folder[:40]  # type: ignore
         print(f"  {role:<10}  {folder_str:<40}  {status}")
         if folder:
             print(f"  {'':10}  {C.GREY}{desc}  ({n} files){C.RESET}")
@@ -532,11 +635,11 @@ def wizard():
     if not ask_yn("Are these assignments correct?", default="y"):
         folder_names = list(all_series.keys())
         for role in list(REQUIRED.keys()) + list(OPTIONAL.keys()):
-            desc    = REQUIRED.get(role, OPTIONAL.get(role,""))
-            current = asgn.get(role,"none")
+            desc = REQUIRED.get(role, OPTIONAL.get(role, ""))
+            current = asgn.get(role, "none")
             print(f"\n  {C.BOLD}{role}{C.RESET} — {desc}")
             print(f"  Current: {C.CYAN}{current}{C.RESET}")
-            opts   = ["(keep current)", "(clear/skip)"] + folder_names
+            opts = ["(keep current)", "(clear/skip)"] + folder_names
             choice = str(pick("Select folder:", opts))
             if choice == "(clear/skip)":
                 asgn.pop(role, None)
@@ -550,9 +653,8 @@ def wizard():
         if not ask_yn("Continue anyway?", default="y"):
             sys.exit(0)
 
-    sess["series_paths"]  = {nm: str(d["path"])
-                              for nm, d in all_series.items()}
-    sess["assignments"]   = asgn
+    sess["series_paths"] = {nm: str(d["path"]) for nm, d in all_series.items()}
+    sess["assignments"] = asgn
 
     # ─────────────────────────────────────────────────────────────────
     header("STEP 4 — OUTPUT FOLDER")
@@ -564,23 +666,22 @@ def wizard():
     else:
         results_dir = default_out
 
-    ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Sanitize name - remove quotes, paths, and weird chars to prevent path injection
-    name_raw  = str(p.get("name", "patient"))
-    import re
-    id_safe   = re.sub(r'[^a-zA-Z0-9_\-]', '_', name_raw).strip('_')
+    name_raw = str(p.get("name", "patient"))
+    id_safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name_raw).strip("_")
     safe_base: str = id_safe if id_safe else "patient"
-    safe           = safe_base[:20] # type: ignore
-    out_dir   = results_dir / f"{safe}_{ts}"
+    safe = safe_base[:20]  # type: ignore
+    out_dir = results_dir / f"{safe}_{ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sess["results_dir"]  = str(results_dir)
-    sess["output_dir"]   = str(out_dir)
+    sess["results_dir"] = str(results_dir)
+    sess["output_dir"] = str(out_dir)
     sess["ground_truth"] = str(results_dir / "ground_truth.nii.gz")
-    sess["monai_dir"]    = str(out_dir / "nifti" / "monai_ready")
-    sess["extra_dir"]    = str(out_dir / "nifti" / "extra_sequences")
-    sess["nifti_dir"]    = str(out_dir / "nifti")
-    sess["bundle_dir"]   = str(PROJECT_ROOT / "models" / "brats_bundle")
+    sess["monai_dir"] = str(out_dir / "nifti" / "monai_ready")
+    sess["extra_dir"] = str(out_dir / "nifti" / "extra_sequences")
+    sess["nifti_dir"] = str(out_dir / "nifti")
+    sess["bundle_dir"] = str(PROJECT_ROOT / "models" / "brats_bundle")
 
     for d in [sess["monai_dir"], sess["extra_dir"], sess["bundle_dir"]]:
         Path(d).mkdir(parents=True, exist_ok=True)
@@ -588,21 +689,20 @@ def wizard():
     ok(f"Output: {out_dir}")
 
     # ── Show actual folder structure using real paths from session ────────
-    dicom_rel = Path(str(dicom_dir)).relative_to(PROJECT_ROOT) \
-                if str(dicom_dir).startswith(str(PROJECT_ROOT)) \
-                else Path(str(dicom_dir))
-    out_rel = out_dir.relative_to(PROJECT_ROOT) \
-              if str(out_dir).startswith(str(PROJECT_ROOT)) \
-              else out_dir
+    dicom_rel = (
+        Path(str(dicom_dir)).relative_to(PROJECT_ROOT)
+        if str(dicom_dir).startswith(str(PROJECT_ROOT))
+        else Path(str(dicom_dir))
+    )
+    out_rel = out_dir.relative_to(PROJECT_ROOT) if str(out_dir).startswith(str(PROJECT_ROOT)) else out_dir
 
     # List top assigned series
     top_series = []
     for i, (k, v) in enumerate(asgn.items()):
-        if i < 4: top_series.append((k, v))
+        if i < 4:
+            top_series.append((k, v))
     series_lines = "\n".join(
-        f"  │   ├── {folder}/"
-        for role, folder in top_series
-        if role in ("T1","T1c","T2","FLAIR")
+        f"  │   ├── {folder}/" for role, folder in top_series if role in ("T1", "T1c", "T2", "FLAIR")
     )
 
     print(f"""
@@ -637,23 +737,22 @@ def wizard():
     header("STEP 5 — SELECT PIPELINE STAGES")
 
     stages = {
-        "stage_1_dicom":     ask_yn("Stage 1 — Convert DICOM → NIfTI",        "y"),
-        "stage_1b_prep":     ask_yn("Stage 1b — BraTS Refinement (RAI + Masking)", "y"),
-        "stage_2_ct":        ask_yn("Stage 2 — CT integration",
-                                     "y" if ct_count > 0 else "n"),
+        "stage_1_dicom": ask_yn("Stage 1 — Convert DICOM → NIfTI", "y"),
+        "stage_1b_prep": ask_yn("Stage 1b — BraTS Refinement (RAI + Masking)", "y"),
+        "stage_2_ct": ask_yn("Stage 2 — CT integration", "y" if ct_count > 0 else "n"),
         "stage_2b_ct_merge": ask_yn("Stage 2b — CT → Segmentation Merge (post-Stage 3)", "n"),
-        "stage_3_segment":   ask_yn("Stage 3 — AI tumour segmentation",        "y"),
-        "stage_4_review":    ask_yn("Stage 4 — Manual review (open in 3D viewer)", "y"),
-        "stage_5_validate":  ask_yn("Stage 5 — Validation metrics",            "y"),
-        "stage_6_location":  ask_yn("Stage 6 — Automated Location Analysis",   "y"),
-        "stage_7_morphology":ask_yn("Stage 7 — Detailed Morphology Metrics",   "y"),
-        "stage_8_radiomics": ask_yn("Stage 8 — Radiomics + ML classification","y"),
-        "stage_8b_brainiac": ask_yn("Stage 8b — Genomic Prediction (BrainIAC)","n"),
-        "stage_9_report":    ask_yn("Stage 9 — Generate PDF report (English)",  "y"),
-        "stage_9b_report_pt":ask_yn("Stage 9b — Generate PDF report (Portuguese)", "n"),
-        "stage_10_viz":      ask_yn("Stage 10 — Enhanced Visualisation",       "y"),
-        "stage_11_mricrogl": ask_yn("Stage 11 — MRIcroGL Advanced 3D Renders","n"),
-        "stage_12_brats":    ask_yn("Stage 12 — BraTS 2021 Style Figure",     "n"),
+        "stage_3_segment": ask_yn("Stage 3 — AI tumour segmentation", "y"),
+        "stage_4_review": ask_yn("Stage 4 — Manual review (open in 3D viewer)", "y"),
+        "stage_5_validate": ask_yn("Stage 5 — Validation metrics", "y"),
+        "stage_6_location": ask_yn("Stage 6 — Automated Location Analysis", "y"),
+        "stage_7_morphology": ask_yn("Stage 7 — Detailed Morphology Metrics", "y"),
+        "stage_8_radiomics": ask_yn("Stage 8 — Radiomics + ML classification", "y"),
+        "stage_8b_brainiac": ask_yn("Stage 8b — Genomic Prediction (BrainIAC)", "n"),
+        "stage_9_report": ask_yn("Stage 9 — Generate PDF report (English)", "y"),
+        "stage_9b_report_pt": ask_yn("Stage 9b — Generate PDF report (Portuguese)", "n"),
+        "stage_10_viz": ask_yn("Stage 10 — Enhanced Visualisation", "y"),
+        "stage_11_mricrogl": ask_yn("Stage 11 — MRIcroGL Advanced 3D Renders", "n"),
+        "stage_12_brats": ask_yn("Stage 12 — BraTS 2021 Style Figure", "n"),
     }
     sess["stages"] = stages
 
@@ -667,7 +766,7 @@ def wizard():
 
     print(f"""
   {C.BOLD}Patient{C.RESET}
-    {p.get('name', 'Unknown')}  |  Age {p.get('age', 'Unknown')}  |  Sex {p.get('sex', 'Unknown')}
+    {p.get("name", "Unknown")}  |  Age {p.get("age", "Unknown")}  |  Sex {p.get("sex", "Unknown")}
 
   {C.BOLD}DICOM source{C.RESET}
     Path: {dicom_dir}
@@ -682,18 +781,18 @@ def wizard():
 
     # Live tree of actual folders created so far
     print(f"\n  {C.BOLD}Folders created on disk:{C.RESET}")
+
     def _tree(path: Path, prefix: str = "  ", max_depth: int = 3, depth: int = 0):
         if depth > max_depth or not path.exists():
             return
-        items = sorted([x for x in path.iterdir()
-                        if not x.name.startswith(".")])
+        items = sorted([x for x in path.iterdir() if not x.name.startswith(".")])
         for i, item in enumerate(items):
-            connector = "└── " if i == len(items)-1 else "├── "
-            ext       = "/ " if item.is_dir() else "  "
-            col       = C.CYAN if item.is_dir() else C.GREY
+            connector = "└── " if i == len(items) - 1 else "├── "
+            ext = "/ " if item.is_dir() else "  "
+            col = C.CYAN if item.is_dir() else C.GREY
             print(f"  {prefix}{connector}{col}{item.name}{ext}{C.RESET}")
             if item.is_dir() and depth < max_depth:
-                extension = "    " if i == len(items)-1 else "│   "
+                extension = "    " if i == len(items) - 1 else "│   "
                 _tree(item, prefix + extension, max_depth, depth + 1)
 
     print(f"  {C.CYAN}{PROJECT_ROOT.name}/{C.RESET}")
@@ -701,26 +800,27 @@ def wizard():
 
     print(f"\n  {C.BOLD}Stages{C.RESET}")
     stage_labels = {
-        "stage_1_dicom":     "Stage 1 — DICOM → NIfTI",
-        "stage_1b_prep":     "Stage 1b — BraTS Refinement",
-        "stage_2_ct":        "Stage 2 — CT Integration",
+        "stage_0_validate": "Stage 0 — Clinical Validator",
+        "stage_1_dicom": "Stage 1 — DICOM → NIfTI",
+        "stage_1b_prep": "Stage 1b — BraTS Refinement",
+        "stage_2_ct": "Stage 2 — CT Integration",
         "stage_2b_ct_merge": "Stage 2b — CT Merge (post-Stage 3)",
-        "stage_3_segment":   "Stage 3 — AI Segmentation",
-        "stage_4_review":    "Stage 4 — Manual Review",
-        "stage_5_validate":  "Stage 5 — Validation Metrics",
-        "stage_6_location":  "Stage 6 — Location Analysis",
-        "stage_7_morphology":"Stage 7 — Morphology",
+        "stage_3_segment": "Stage 3 — AI Segmentation",
+        "stage_4_review": "Stage 4 — Manual Review",
+        "stage_5_validate": "Stage 5 — Validation Metrics",
+        "stage_6_location": "Stage 6 — Location Analysis",
+        "stage_7_morphology": "Stage 7 — Morphology",
         "stage_8_radiomics": "Stage 8 — Radiomics",
         "stage_8b_brainiac": "Stage 8b — BrainIAC Prediction",
-        "stage_9_report":    "Stage 9 — PDF Report (EN)",
-        "stage_9b_report_pt":"Stage 9b — PDF Report (PT)",
-        "stage_10_viz":      "Stage 10 — Visualisation",
+        "stage_9_report": "Stage 9 — PDF Report (EN)",
+        "stage_9b_report_pt": "Stage 9b — PDF Report (PT)",
+        "stage_10_viz": "Stage 10 — Visualisation",
         "stage_11_mricrogl": "Stage 11 — MRIcroGL",
-        "stage_12_brats":    "Stage 12 — BraTS Figure",
+        "stage_12_brats": "Stage 12 — BraTS Figure",
     }
     for s, en in stages.items():
         icon = f"{C.GREEN}✅{C.RESET}" if en else f"{C.GREY}⏭{C.RESET}"
-        label = stage_labels.get(s, s.replace('_', ' '))
+        label = stage_labels.get(s, s.replace("_", " "))
         print(f"    {icon}  {label}")
 
     print()
@@ -738,6 +838,7 @@ def wizard():
 # ─────────────────────────────────────────────────────────────────────────
 # PIPELINE RUNNER
 # ─────────────────────────────────────────────────────────────────────────
+
 
 def run_stage(label, script_name, sess, extra_env=None, required=False):
     scripts_dir = PROJECT_ROOT / "scripts"
@@ -758,7 +859,7 @@ def run_stage(label, script_name, sess, extra_env=None, required=False):
     # stderr is also streamed live; we collect it separately only to show on failure.
     stderr_lines: list = []
     proc = subprocess.Popen(
-        [sys.executable, "-u", str(script_path)],   # -u = unbuffered stdout
+        [sys.executable, "-u", str(script_path)],  # -u = unbuffered stdout
         env=env,
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.PIPE,
@@ -766,15 +867,17 @@ def run_stage(label, script_name, sess, extra_env=None, required=False):
         text=True,
         bufsize=1,
     )
+
     # Stream stdout live; collect stderr for failure diagnostics
     def _drain_stderr():
         for line in proc.stderr:  # type: ignore[union-attr]
             stderr_lines.append(line)
             sys.stderr.write(line)
             sys.stderr.flush()
+
     t = threading.Thread(target=_drain_stderr, daemon=True)
     t.start()
-    for line in proc.stdout:    # type: ignore[union-attr]
+    for line in proc.stdout:  # type: ignore[union-attr]
         sys.stdout.write(line)
         sys.stdout.flush()
     proc.wait()
@@ -808,7 +911,7 @@ def run_stage_review(sess):
 
   Please open the segmentation in a 3D viewer to verify quality.
   If corrections are needed, edit the mask and save as:
-    {C.YELLOW}{sess.get('ground_truth', out_dir / 'ground_truth.nii.gz')}{C.RESET}
+    {C.YELLOW}{sess.get("ground_truth", out_dir / "ground_truth.nii.gz")}{C.RESET}
 
   Files to review:
     • {seg_path}
@@ -828,12 +931,15 @@ def find_seg_session(results_base: Path, current_session: str) -> str:
     """Return most recent session dir that has segmentation_ensemble.nii.gz"""
     if not results_base.exists():
         return current_session
-    candidates = sorted([
-        d for d in results_base.iterdir()
-        if d.is_dir()
-        and d.name != current_session
-        and (d / "segmentation_ensemble.nii.gz").exists()
-    ], key=lambda x: x.name, reverse=True)
+    candidates = sorted(
+        [
+            d
+            for d in results_base.iterdir()
+            if d.is_dir() and d.name != current_session and (d / "segmentation_ensemble.nii.gz").exists()
+        ],
+        key=lambda x: x.name,
+        reverse=True,
+    )
     if candidates:
         return candidates[0].name
     return current_session
@@ -841,7 +947,7 @@ def find_seg_session(results_base: Path, current_session: str) -> str:
 
 def run_pipeline(sess):
     st = sess.get("stages", {})
-    p  = sess.get("patient", {})
+    p = sess.get("patient", {})
 
     # ─────────────────────────────────────────────────────────────────
     # PREFLIGHT GATE
@@ -860,15 +966,26 @@ def run_pipeline(sess):
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True, bufsize=1,
+        text=True,
+        bufsize=1,
     )
+
     def _pf_stderr():
         for ln in pf_proc.stderr:  # type: ignore[union-attr]
-            pf_stderr.append(ln); sys.stderr.write(ln); sys.stderr.flush()
+            pf_stderr.append(ln)
+            sys.stderr.write(ln)
+            sys.stderr.flush()
+
     threading.Thread(target=_pf_stderr, daemon=True).start()
-    for ln in pf_proc.stdout:  # type: ignore[union-attr]
-        sys.stdout.write(ln); sys.stdout.flush()
-    pf_proc.wait()
+    try:
+        for ln in pf_proc.stdout:  # type: ignore[union-attr]
+            sys.stdout.write(ln)
+            sys.stdout.flush()
+        pf_proc.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        pf_proc.kill()
+        err("Preflight check timed out (120 s) — pipeline aborted.")
+        sys.exit(1)
     if pf_proc.returncode != 0:
         print(f"\n{C.RED}{C.BOLD}❌ Preflight failed — pipeline aborted.{C.RESET}")
         if pf_stderr:
@@ -878,26 +995,35 @@ def run_pipeline(sess):
     print(f"{C.GREEN}✅ Preflight passed — starting pipeline...{C.RESET}\n")
 
     print(f"""
-{C.CYAN}{'═'*65}
+{C.CYAN}{"═" * 65}
 {C.BOLD}  PIPELINE STARTING
-{C.RESET}{C.CYAN}  Patient : {p.get('name','?')}
-  Output  : {sess['output_dir']}
-{'═'*65}{C.RESET}
+{C.RESET}{C.CYAN}  Patient : {p.get("name", "?")}
+  Output  : {sess["output_dir"]}
+{"═" * 65}{C.RESET}
 """)
 
     results_base = Path(sess.get("results_dir", PROJECT_ROOT / "results"))
     session_name = Path(sess["output_dir"]).name
-    seg_session = find_seg_session(results_base, session_name)
+    # SAFETY: always point downstream stages at the CURRENT session.  The
+    # legacy find_seg_session() helper would silently pull another patient's
+    # segmentation when the current session had none yet — a cross-patient
+    # data leak.  Opt-in via PYBRAIN_USE_PRIOR_SEG=1 for explicit re-use.
+    if os.environ.get("PYBRAIN_USE_PRIOR_SEG") == "1":
+        seg_session = find_seg_session(results_base, session_name)
+        if seg_session != session_name:
+            warn(f"PYBRAIN_USE_PRIOR_SEG=1 → reusing seg from prior session: {seg_session}")
+    else:
+        seg_session = session_name
     seg_env = {"PYBRAIN_SEG_SESSION": seg_session}
 
     results = {}
     if st.get("stage_1_dicom"):
-        results[1] = run_stage("Stage 1 — DICOM → NIfTI",      "1_dicom_to_nifti.py",   sess)
+        results[1] = run_stage("Stage 1 — DICOM → NIfTI", "1_dicom_to_nifti.py", sess)
     if st.get("stage_1b_prep"):
         results["1b"] = run_stage("Stage 1b — BraTS Refinement", "1b_brats_preproc.py", sess)
     # Stage 2 before 3 so registered CT (ct_brain_registered.nii.gz) exists for segmentation boost
     if st.get("stage_2_ct"):
-        results[2] = run_stage("Stage 2 — CT Integration",      "2_ct_integration.py",   sess)
+        results[2] = run_stage("Stage 2 — CT Integration", "2_ct_integration.py", sess)
     if st.get("stage_3_segment"):
         seg_script = sess.get("segmentation_script", "3_brain_tumor_analysis.py")
         results[3] = run_stage("Stage 3 — AI Segmentation", seg_script, sess, extra_env=seg_env)
@@ -905,10 +1031,7 @@ def run_pipeline(sess):
     # Stage 2b after Stage 3 — merge CT masks into the fresh segmentation
     if st.get("stage_2b_ct_merge"):
         results["2b"] = run_stage(
-            "Stage 2b — CT → Segmentation Merge",
-            "2_ct_integration.py",
-            sess,
-            extra_env={"PYBRAIN_MERGE_ONLY": "1"}
+            "Stage 2b — CT → Segmentation Merge", "2_ct_integration.py", sess, extra_env={"PYBRAIN_MERGE_ONLY": "1"}
         )
 
     # ── Stage 4: Manual Review ──────────────────────────────────────────
@@ -917,33 +1040,33 @@ def run_pipeline(sess):
 
     # ── Stage 5: Validation Metrics ────────────────────────────────────
     if st.get("stage_5_validate"):
-        results[5] = run_stage("Stage 5 — Validation Metrics",
-                               "5_validate_segmentation.py", sess,
-                               extra_env=seg_env, required=False)
+        results[5] = run_stage(
+            "Stage 5 — Validation Metrics", "5_validate_segmentation.py", sess, extra_env=seg_env, required=False
+        )
 
     if st.get("stage_6_location"):
-        results[6] = run_stage("Stage 6 — Location Analysis",   "6_tumour_location.py",  sess, extra_env=seg_env)
+        results[6] = run_stage("Stage 6 — Location Analysis", "6_tumour_location.py", sess, extra_env=seg_env)
     if st.get("stage_7_morphology"):
-        results[7] = run_stage("Stage 7 — Morphology",          "7_tumour_morphology.py",sess, extra_env=seg_env)
+        results[7] = run_stage("Stage 7 — Morphology", "7_tumour_morphology.py", sess, extra_env=seg_env)
     if st.get("stage_8_radiomics"):
-        results[8] = run_stage("Stage 8 — Radiomics",           "8_radiomics_analysis.py",sess, extra_env=seg_env)
+        results[8] = run_stage("Stage 8 — Radiomics", "8_radiomics_analysis.py", sess, extra_env=seg_env)
     if st.get("stage_8b_brainiac"):
         results[81] = run_stage("Stage 8b — Genomic Prediction (BrainIAC)", "8b_brainiac_prediction.py", sess)
     if st.get("stage_10_viz"):
-        results[10]= run_stage("Stage 10 — Visualisation",      "10_enhanced_visualisation.py", sess, extra_env=seg_env)
+        results[10] = run_stage("Stage 10 — Visualisation", "10_enhanced_visualisation.py", sess, extra_env=seg_env)
     if st.get("stage_11_mricrogl"):
-        results[11] = run_stage("Stage 11 — MRIcroGL Advanced",  "11_mricrogl_visualisation.py", sess, extra_env=seg_env)
+        results[11] = run_stage("Stage 11 — MRIcroGL Advanced", "11_mricrogl_visualisation.py", sess, extra_env=seg_env)
     if st.get("stage_9_report"):
-        results[9] = run_stage("Stage 9 — PDF Report (English)", "9_generate_report.py",  sess)
+        results[9] = run_stage("Stage 9 — PDF Report (English)", "9_generate_report.py", sess)
     if st.get("stage_9b_report_pt"):
-        results[91] = run_stage("Stage 9b — PDF Report (Portuguese)", "9_generate_report_pt.py",  sess)
+        results[91] = run_stage("Stage 9b — PDF Report (Portuguese)", "9_generate_report_pt.py", sess)
     if st.get("stage_12_brats"):
         results[12] = run_stage("Stage 12 — BraTS Figure 1", "12_brats_figure1.py", sess)
 
     header("PIPELINE COMPLETE")
     passed = sum(1 for v in results.values() if v)
-    total  = len(results)
-    out    = Path(sess['output_dir'])
+    total = len(results)
+    out = Path(sess["output_dir"])
 
     print(f"""
   Stages completed : {C.GREEN}{passed}{C.RESET}/{total}
@@ -957,10 +1080,13 @@ def run_pipeline(sess):
     if out.exists():
         print(f"  {C.BOLD}Files produced:{C.RESET}")
         print(f"  {C.CYAN}{out.name}/{C.RESET}")
-        items = sorted([x for x in out.rglob("*")
-                        if not x.name.startswith(".")
-                        and x.suffix in (".gz",".json",".html",
-                                         ".png",".pdf",".txt")])
+        items = sorted(
+            [
+                x
+                for x in out.rglob("*")
+                if not x.name.startswith(".") and x.suffix in (".gz", ".json", ".html", ".png", ".pdf", ".txt")
+            ]
+        )
         # Group by subfolder
         by_dir = defaultdict(list)
         for item in items:
@@ -975,29 +1101,77 @@ def run_pipeline(sess):
                 for item in sorted(files, key=lambda p: str(p.relative_to(out))):
                     rel_to_subdir = item.relative_to(out / subdir)
                     size = item.stat().st_size / 1024
-                    size_s = f"{size/1024:.1f} MB" if size>1024 else f"{size:.0f} KB"
+                    size_s = f"{size / 1024:.1f} MB" if size > 1024 else f"{size:.0f} KB"
                     print(f"  │   ├── {C.GREY}{str(rel_to_subdir):<40}{C.RESET}  {C.GREY}{size_s}{C.RESET}")
             else:
                 for f in sorted(files):
                     size = f.stat().st_size / 1024
-                    size_s = f"{size/1024:.1f} MB" if size>1024 else f"{size:.0f} KB"
+                    size_s = f"{size / 1024:.1f} MB" if size > 1024 else f"{size:.0f} KB"
                     fname = f.name
-                    icon = ("📊" if fname.endswith(".json") else
-                            "🌐" if fname.endswith(".html") else
-                            "🖼 " if fname.endswith(".png")  else
-                            "📄" if fname.endswith(".pdf")  else
-                            "🧠" if fname.endswith(".gz")   else "  ")
+                    icon = (
+                        "📊"
+                        if fname.endswith(".json")
+                        else "🌐"
+                        if fname.endswith(".html")
+                        else "🖼 "
+                        if fname.endswith(".png")
+                        else "📄"
+                        if fname.endswith(".pdf")
+                        else "🧠"
+                        if fname.endswith(".gz")
+                        else "  "
+                    )
                     print(f"  ├── {icon} {C.GREEN}{fname:<42}{C.RESET}  {C.GREY}{size_s}{C.RESET}")
 
     print()
 
 
-
 # ─────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PY-BRAIN Pipeline")
+    parser.add_argument("--session", type=str, default=None, help="Path to session.json to resume (skips wizard)")
+    parser.add_argument(
+        "--stages",
+        type=str,
+        default=None,
+        help="Comma-separated stage keys to run (e.g. stage_3_segment,stage_8_radiomics)",
+    )
+    parser.add_argument("--headless", action="store_true", help="Auto-accept defaults, never prompt")
+    args = parser.parse_args()
+
     try:
-        sess = wizard()
+        if args.session:
+            with open(args.session) as f:
+                sess = json.load(f)
+            # Resolve every path-like field so a moved/copied session still works
+            _PATH_KEYS = (
+                "project_root", "output_dir", "results_dir",
+                "monai_dir", "extra_dir", "nifti_dir", "bundle_dir",
+                "mri_dicom_dir", "ct_dicom_dir", "ground_truth",
+            )
+            for _k in _PATH_KEYS:
+                if _k in sess and sess[_k]:
+                    sess[_k] = str(Path(sess[_k]).expanduser().resolve())
+            # series_paths is a nested dict of folder_name -> path
+            if isinstance(sess.get("series_paths"), dict):
+                sess["series_paths"] = {
+                    k: str(Path(v).expanduser().resolve()) for k, v in sess["series_paths"].items()
+                }
+            if args.stages:
+                requested = {s.strip() for s in args.stages.split(",")}
+                for k in sess.get("stages", {}):
+                    sess["stages"][k] = k in requested
+            ok(f"Loaded session: {args.session}")
+        else:
+            sess = wizard()
         run_pipeline(sess)
     except KeyboardInterrupt:
         print(f"\n\n  {C.YELLOW}Cancelled.{C.RESET}\n")
         sys.exit(0)
+    except Exception as exc:
+        import traceback
+        print(f"\n  {C.RED}{C.BOLD}💥 Unexpected error: {exc}{C.RESET}")
+        traceback.print_exc()
+        sys.exit(1)
