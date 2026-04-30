@@ -99,7 +99,7 @@ required_files = [
     "pybrain/io/logging_utils.py",
     "pybrain/report/__init__.py",
     "pybrain/report/pdf_report.py",
-    "config/defaults.yaml",
+    "pybrain/config/defaults.yaml",
     "tests/verify_windsurf_changes.py",
 ]
 
@@ -146,7 +146,6 @@ required_packages = [
 
 optional_packages = [
     ("radiomics", "PyRadiomics (optional)"),
-    ("nnunet", "nnUNet (optional)"),
 ]
 for pkg, name in required_packages:
     if _import_with_timeout(pkg):
@@ -189,9 +188,9 @@ for f in optional_models:
 # ─── 4. CONFIG ────────────────────────────────────────────────────────────────
 print("\n⚙️  4. Configuration")
 
-cfg = read_file(PROJECT_ROOT / "config/defaults.yaml")
+cfg = read_file(PROJECT_ROOT / "pybrain/config/defaults.yaml")
 
-check("config", "defaults.yaml not empty", len(cfg) > 100, "config/defaults.yaml is empty or missing")
+check("config", "defaults.yaml not empty", len(cfg) > 100, "pybrain/config/defaults.yaml is empty or missing")
 check("config", "WT threshold = 0.40", "wt: 0.40" in cfg, "CRITICAL: wt threshold wrong — must be 0.40")
 check("config", "TC threshold = 0.35", "tc: 0.35" in cfg, "CRITICAL: tc threshold wrong — must be 0.35")
 check("config", "ET threshold = 0.35", "et: 0.35" in cfg, "CRITICAL: et threshold wrong — must be 0.35")
