@@ -191,7 +191,6 @@ def _guess_type(name):
     t1_patterns = [
         "mprage",
         "mp2rage",
-        "t1_mprage",
         "t1_3d",
         "t1_sag",
         "3d_t1",
@@ -204,11 +203,15 @@ def _guess_type(name):
         "t1w",
         "t1",
         # Handle numbered axial/cor/sag T1 variants (AX_T1_3, COR_T1_4, SAG_T1_6)
-        r"^ax_t1",
-        r"^cor_t1",
-        r"^sag_t1",
+        # These are already lowercase due to n = name.lower() conversion above
+        "ax_t1_",
+        "cor_t1_",
+        "sag_t1_",
+        # Handle t1_mprage with extra modifiers (t1_mprage_sag_p2_iso_10_2)
+        "t1_mprage",
     ]
-    if any(re.search(rf"\b{re.escape(x)}\b", n) for x in t1_patterns):
+    # Use simple substring match for patterns with underscores/numbers
+    if any(x in n for x in ["ax_t1_", "cor_t1_", "sag_t1_", "t1_mprage"]) or any(re.search(rf"\b{re.escape(x)}\b", n) for x in t1_patterns):
         return "T1"
     # FLAIR
     if any(
