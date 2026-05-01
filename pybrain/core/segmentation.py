@@ -26,9 +26,9 @@ class SegmentationConfig:
     """All knobs for a segmentation run."""
 
     # Thresholds
-    wt_threshold: float = 0.40
-    tc_threshold: float = 0.35
-    et_threshold: float = 0.35
+    wt_threshold: float = 0.50
+    tc_threshold: float = 0.40
+    et_threshold: float = 0.45
 
     # CT boost
     ct_boost: Dict[str, Any] = field(
@@ -114,6 +114,7 @@ def segment(
     import time
     from pybrain.core.normalization import zscore_robust
     from pybrain.core.inference import run_ensemble_inference
+    from pybrain.core.postprocessing import postprocess_segmentation, PostprocessingConfig
 
     t0 = time.time()
 
@@ -145,6 +146,35 @@ def segment(
         device=config.device,
     )
 
+    # Stack probabilities for postprocessing
+    ensemble_prob = np.stack([ensemble.tc_prob, ensemble.wt_prob, ensemble.et_prob], axis=0)
+
+    # Build postprocessing config from defaults.yaml settings
+    post_cfg = PostprocessingConfig(
+        shape_filtering=False,  # Disabled for 3D compatibility
+        prune_isolated_edema=True,  # Re-enable to reduce WT volume
+        anatomical_constraints=False,  # Disabled for now
+        edema_intensity_filter=True,  # Re-enable to further reduce WT
+        edema_max_distance_mm=40.0,
+    )
+
+    # Apply postprocessing
+    seg_full, necrotic, edema, enhancing, final_thresholds = postprocess_segmentation(
+        ensemble_prob=ensemble_prob,
+        brain_mask=brain_mask,
+        vox_vol_cc=0.001,
+        volumes=normed,
+        thresholds={
+            "wt": config.wt_threshold,
+            "tc": config.tc_threshold,
+            "et": config.et_threshold,
+        },
+        config=post_cfg,
+        voxel_spacing=(1.0, 1.0, 1.0),
+        tumor_type="",
+    )
+
+    # Extract probability maps from ensemble
     wt_prob = ensemble.wt_prob
     tc_prob = ensemble.tc_prob
     et_prob = ensemble.et_prob
@@ -157,26 +187,15 @@ def segment(
         ct_mask = (ct_data >= hu_min) & (ct_data <= hu_max)
         wt_prob[ct_mask] = np.clip(wt_prob[ct_mask] + boost, 0, 1)
 
-    # Threshold + nested constraint (TC ⊆ WT, ET ⊆ TC)
-    wt_bin = (wt_prob > config.wt_threshold).astype(np.float32) * brain_mask
-    tc_bin = (tc_prob > config.tc_threshold).astype(np.float32) * wt_bin
-    et_bin = (et_prob > config.et_threshold).astype(np.float32) * tc_bin
-
-    # Compose: 0=bg, 1=necrotic, 2=edema, 3=enhancing
-    seg_full = np.zeros_like(wt_bin, dtype=np.uint8)
-    seg_full[wt_bin > 0] = 2
-    seg_full[tc_bin > 0] = 1
-    seg_full[et_bin > 0] = 3
-
+    # Volumes from postprocessed segmentation
     vox_vol_cc = 0.001
-    wt_cc = float(wt_bin.sum() * vox_vol_cc)
-    tc_cc = float(tc_bin.sum() * vox_vol_cc)
-    et_cc = float(et_bin.sum() * vox_vol_cc)
+    wt_cc = float(edema.sum() * vox_vol_cc) + float(necrotic.sum() * vox_vol_cc) + float(enhancing.sum() * vox_vol_cc)
+    tc_cc = float(necrotic.sum() * vox_vol_cc) + float(enhancing.sum() * vox_vol_cc)
+    et_cc = float(enhancing.sum() * vox_vol_cc)
     nc_cc = tc_cc - et_cc
 
-    # Activation check (now meaningful — actual probabilities computed)
-    max_prob = max(wt_prob.max(), tc_prob.max(), et_prob.max())
-    model_activated = bool(max_prob >= 0.10)
+    elapsed = time.time() - t0
+    model_activated = not final_thresholds.get("_model_non_activation", False)
 
     return SegmentationResult(
         seg_full=seg_full,

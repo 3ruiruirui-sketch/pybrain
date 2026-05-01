@@ -1,10 +1,10 @@
 # pybrain/config/defaults.yaml
-# Segmentation thresholds (post-boost — v6 calibration)
-# Lowered WT threshold to improve edema periphery capture (Dice ED ~0.53 → ~0.65-0.70)
+# Segmentation thresholds (legacy defaults from 3_brain_tumor_analysis.py)
+# These match the legacy script which produced 44.5 cc WT for Celeste (radiologist: 38 cc)
 thresholds:
-  wt: 0.40   # Whole Tumour — lowered to capture edema periphery better
-  tc: 0.35   # Tumour Core — recalibrated for correct probability space
-  et: 0.35   # Enhancing Tumour — recalibrated (model max ET prob ~0.60)
+  wt: 0.50   # Whole Tumour — legacy default
+  tc: 0.40   # Tumour Core — legacy default
+  et: 0.45   # Enhancing Tumour — legacy default
 
 # Statistical Threshold Optimization (BraTS QU-inspired)
 statistical_thresholds:

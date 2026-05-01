@@ -16,9 +16,63 @@ import numpy as np
 import torch
 
 from pybrain.io.logging_utils import get_logger
+from pybrain.core.postprocessing import postprocess_segmentation, PostprocessingConfig
 
 
 logger = get_logger("core.inference")
+
+
+def _load_platt_coefficients() -> dict[str, dict[str, float]] | None:
+    """Load Platt calibration coefficients from models/calibration/platt_coefficients.json."""
+    import json
+    from pathlib import Path
+    
+    # Try to find the calibration file
+    calib_path = Path(__file__).parent.parent.parent / "models" / "calibration" / "platt_coefficients.json"
+    if not calib_path.exists():
+        logger.debug(f"Platt calibration file not found at {calib_path}")
+        return None
+    
+    try:
+        with open(calib_path) as f:
+            coeffs = json.load(f)
+        logger.info(f"Loaded Platt calibration coefficients from {calib_path}")
+        return coeffs
+    except Exception as e:
+        logger.warning(f"Failed to load Platt calibration coefficients: {e}")
+        return None
+
+
+def _apply_platt_calibration(
+    ensemble_prob: np.ndarray,
+    coeffs: dict[str, dict[str, float]],
+) -> np.ndarray:
+    """Apply Platt scaling calibration to ensemble probabilities.
+    
+    Args:
+        ensemble_prob: [3, D, H, W] array with [TC, WT, ET]
+        coeffs: Dictionary with 'tc', 'wt', 'et' keys, each with 'A' and 'B' parameters
+    
+    Returns:
+        Calibrated probabilities [3, D, H, W]
+    """
+    calibrated = ensemble_prob.copy()
+    
+    for ch_idx, subregion in enumerate(["tc", "wt", "et"]):
+        subregion_coeffs = coeffs.get(subregion, {})
+        A = subregion_coeffs.get("A")
+        B = subregion_coeffs.get("B")
+        
+        if A is not None and B is not None:
+            # Clip probabilities to avoid log(0) and extreme logits
+            p_clip = np.clip(calibrated[ch_idx], 1e-7, 1.0 - 1e-7)
+            logit = np.log(p_clip / (1.0 - p_clip))
+            # Clip exponent to prevent overflow
+            exponent = np.clip(-(A * logit + B), -500, 500)
+            calibrated[ch_idx] = 1.0 / (1.0 + np.exp(exponent))
+            logger.debug(f"Applied Platt calibration to {subregion}: A={A:.2f}, B={B:.2f}")
+    
+    return calibrated
 
 
 @dataclass
@@ -139,31 +193,24 @@ def run_ensemble_inference(
             "of segresnet/tta4/swinunetr must have weight > 0."
         )
 
-    # ── Weighted average ─────────────────────────────────────────────────────
-    total_w = sum(w for _, _, w in ensemble_components)
-    if total_w <= 0:
-        raise RuntimeError(f"Total ensemble weight is {total_w}; must be > 0.")
-    
-    weighted = sum(p * (w / total_w) for _, p, w in ensemble_components)
-    # weighted shape: [3, D, H, W] for (TC, WT, ET) per segresnet convention
-    
-    tc_prob = weighted[0].astype(np.float32)
-    wt_prob = weighted[1].astype(np.float32)
-    et_prob = weighted[2].astype(np.float32)
+    # Weighted average of ensemble components
+    # Each model outputs [3, D, H, W] with [TC, WT, ET]
+    if ensemble_components:
+        weights = [w for _, _, w in ensemble_components]
+        probs = [p for _, p, _ in ensemble_components]
+        # Average across models, keeping channels separate
+        ensemble_prob = np.average(probs, axis=0, weights=weights)  # [3, D, H, W]
+    else:
+        raise RuntimeError("No ensemble component ran.")
 
-    # ── Platt calibration ────────────────────────────────────────────────────
-    cal_cfg = config.get("calibration", {})
-    if cal_cfg.get("enabled", True):
-        try:
-            from pybrain.models.calibration import apply_platt_calibration
-            wt_prob = apply_platt_calibration(wt_prob, "wt")
-            tc_prob = apply_platt_calibration(tc_prob, "tc")
-            et_prob = apply_platt_calibration(et_prob, "et")
-            logger.info("Applied Platt calibration to ensemble probabilities")
-        except ImportError:
-            logger.warning("Platt calibration module not found; using raw probabilities")
-        except Exception as e:
-            logger.warning(f"Platt calibration failed: {e}; using raw probabilities")
+    # Apply Platt calibration if coefficients available
+    platt_coeffs = _load_platt_coefficients()
+    if platt_coeffs:
+        ensemble_prob = _apply_platt_calibration(ensemble_prob, platt_coeffs)
+
+    tc_prob = ensemble_prob[0].astype(np.float32)
+    wt_prob = ensemble_prob[1].astype(np.float32)
+    et_prob = ensemble_prob[2].astype(np.float32)
 
     # ── Mask to brain ────────────────────────────────────────────────────────
     bm = brain_mask.astype(np.float32)
