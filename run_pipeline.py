@@ -163,6 +163,7 @@ def _guess_type(name):
     t1c_patterns = [
         r"\bciv\b",
         r"_civ\b",
+        r"civ_",  # civ followed by underscore (e.g., civ_14)
         r"\bcontrast\b",
         r"\bgad\b",
         r"_?postcontrast\b",  # postcontrast or _postcontrast
@@ -173,15 +174,16 @@ def _guess_type(name):
         r"\bt1_post_",       # t1_post_<modifier>
         r"\bax_t1_post\b",
         r"\bt1c\b",
-        r"t1c_",
+        "t1c_",
         r"\bt1ce\b",
-        r"t1ce_",
+        "t1ce_",
         r"t1\+",
         r"\+c\b",
         r"\bt1_ce\b",
-        r"t1_ce_",
+        "t1_ce_",
         r"\bt1_gd\b",
-        r"t1_gd_",
+        "t1_gd_",
+        r"t1_se_.*_civ",  # t1_se_*_civ
     ]
     if any(re.search(p, n) for p in t1c_patterns):
         return "T1c"
@@ -201,6 +203,10 @@ def _guess_type(name):
         "t1_tse",
         "t1w",
         "t1",
+        # Handle numbered axial/cor/sag T1 variants (AX_T1_3, COR_T1_4, SAG_T1_6)
+        r"^ax_t1",
+        r"^cor_t1",
+        r"^sag_t1",
     ]
     if any(re.search(rf"\b{re.escape(x)}\b", n) for x in t1_patterns):
         return "T1"
